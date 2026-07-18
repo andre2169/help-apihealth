@@ -1,0 +1,7 @@
+DISPLAY_NAME=helpweb-health-api
+DESCRIPTION=API do HelpWeb Health
+MAIN=main.py
+LANGUAGE=python
+MEMORY=512
+VERSION=latest
+SUBDOMAIN=suaapihelphealth
