@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # Em producao, deixe a documentacao e o health check do banco desligados.
     ENABLE_API_DOCS: bool = False
     ENABLE_DB_HEALTH_ENDPOINT: bool = False
+    API_DOCS_USERNAME: str = "admin"
+    API_DOCS_PASSWORD: str | None = None
+
+    # Logs: "text" para leitura simples na Shard ou "json" para monitoramento.
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "text"
+    ALLOW_LOG_VERIFICATION_CODES: bool = False
 
     # Email / códigos de verificação
     SMTP_HOST: str | None = None

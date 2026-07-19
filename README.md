@@ -13,6 +13,7 @@ A API centraliza o ciclo de vida dos chamados:
 - cadastro e autenticacao de usuarios;
 - perfil de usuario com telefone, funcao, setor, unidade e preferencia de notificacao;
 - alteracao de email e senha com codigo temporario de verificacao;
+- recuperacao de conta por codigo enviado ao email cadastrado;
 - abertura de chamados por funcionarios;
 - classificacao por setor, categoria, equipamento, patrimonio e impacto operacional;
 - acompanhamento por status;
@@ -36,13 +37,18 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 ## Principais recursos
 
 - API REST com FastAPI.
-- Autenticacao JWT.
+- Autenticacao JWT com PyJWT.
 - Criptografia de senha com Passlib/Bcrypt.
 - Troca de senha e email protegida por codigo temporario enviado por email.
+- Recuperacao de conta com resposta publica generica para reduzir enumeracao de usuarios.
 - Logout com revogacao do JWT atual por `jti`.
 - Rate limit global em memoria por IP + usuario/token, alem do bloqueio especifico de falhas no login.
 - Headers de seguranca contra clickjacking e exposicao indevida de respostas.
-- Swagger/OpenAPI desligado por padrao em producao.
+- Logs de SMTP mascaram o email de destino.
+- Logs podem ser emitidos em texto simples ou JSON por `LOG_FORMAT`.
+- Tentativas de codigo invalido/expirado ficam registradas para auditoria sem salvar o codigo digitado.
+- Logs e rate limit usam `X-Forwarded-For`, `X-Real-IP` ou `CF-Connecting-IP` quando a API esta atras de proxy.
+- Swagger/OpenAPI desligado por padrao em producao e com protecao opcional por usuario/senha quando habilitado.
 - Health check publico simples, sem expor diagnostico do banco por padrao.
 - Controle de permissao por perfil.
 - SQLAlchemy ORM para facilitar migracao futura de banco.
@@ -84,6 +90,11 @@ ADMIN_PASSWORD=troque_esta_senha_antes_de_publicar
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
+API_DOCS_USERNAME=admin
+API_DOCS_PASSWORD=
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+ALLOW_LOG_VERIFICATION_CODES=false
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USERNAME=
@@ -108,6 +119,10 @@ Descricao:
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
 - `ENABLE_API_DOCS`: libera `/docs`, `/redoc` e `/openapi.json`. Use `true` apenas em desenvolvimento local.
 - `ENABLE_DB_HEALTH_ENDPOINT`: libera `/health/db`. Em producao, mantenha `false` e use apenas `/health` como rota publica.
+- `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`: protegem a documentacao por autenticacao basica quando `ENABLE_API_DOCS=true`. Se a senha ficar vazia, a documentacao habilitada fica sem senha; evite isso em producao.
+- `LOG_LEVEL`: nivel minimo dos logs, como `INFO`, `WARNING` ou `ERROR`.
+- `LOG_FORMAT`: use `text` para leitura simples ou `json` para monitoramento externo.
+- `ALLOW_LOG_VERIFICATION_CODES`: se `true`, permite exibir codigos de verificacao nos logs para teste local. Em producao, mantenha `false`.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` e `MAIL_FROM`: configuracao do servidor de email usado para enviar codigos de verificacao.
 - `MAIL_FROM_NAME`: nome exibido como remetente do email.
 - `REPLY_TO_EMAIL`: email opcional para resposta/suporte. Pode ficar vazio.
@@ -119,7 +134,7 @@ Descricao:
 
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
-Se o SMTP nao estiver configurado, a API ainda gera o codigo e mostra nos logs. Isso facilita teste local, mas em producao o ideal e configurar um email real.
+Se o SMTP nao estiver configurado, a API gera o codigo, mas nao exibe o codigo nos logs por padrao. Para teste local, e possivel ativar `ALLOW_LOG_VERIFICATION_CODES=true`. Em producao, configure um SMTP real e mantenha essa opcao desligada.
 
 ## Como rodar localmente
 
@@ -196,7 +211,35 @@ alembic upgrade head
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
+- Quando `ENABLE_API_DOCS=true`, a documentacao pode ser protegida por `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`.
 - `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
+- Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho.
+- Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
+- O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
+- Em 19/07/2026, as dependencias de producao do `requirements.txt` foram atualizadas e auditadas com `pip-audit`, sem vulnerabilidades conhecidas no resultado.
+- O projeto usa SQLite no deploy simples. O arquivo do banco nao e criptografado integralmente por padrao; para criptografia em repouso completa, use SQLCipher ou banco gerenciado com criptografia quando migrar para PostgreSQL/MySQL.
+
+## Recuperacao de conta
+
+O fluxo de recuperacao de conta permite redefinir senha sem estar logado:
+
+1. O usuario informa o email cadastrado e a nova senha desejada.
+2. A API retorna uma mensagem generica, sem confirmar publicamente se o email existe.
+3. Se a conta existir, um codigo temporario e enviado por email.
+4. O usuario informa o codigo recebido e a nova senha e a API redefine a senha.
+
+Endpoints:
+
+```text
+POST /api/v1/auth/password/recovery/request
+POST /api/v1/auth/password/recovery/confirm
+```
+
+Esse fluxo usa a mesma tabela de verificacao temporaria de email/senha, com proposito separado para recuperacao.
+
+## Logs e privacidade
+
+Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. A API tambem tenta registrar o IP real encaminhado pelo proxy da hospedagem usando `X-Forwarded-For`, `X-Real-IP` ou `CF-Connecting-IP`, caindo para o IP da conexao apenas quando esses cabecalhos nao existem.
 
 ## Seeds para demonstracao
 
@@ -221,6 +264,11 @@ ADMIN_PASSWORD=senha_inicial_forte_do_administrador
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
+API_DOCS_USERNAME=admin
+API_DOCS_PASSWORD=
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+ALLOW_LOG_VERIFICATION_CODES=false
 SMTP_HOST=smtp.seu-provedor.com
 SMTP_PORT=587
 SMTP_USERNAME=usuario_smtp

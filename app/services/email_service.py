@@ -4,6 +4,7 @@ from email.utils import formataddr, formatdate
 from email.message import EmailMessage
 
 from app.core.config import settings
+from app.core.request_context import mask_email
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def send_email(*, to_email: str, subject: str, body: str) -> bool:
     if not settings.smtp_configured:
         logger.warning(
             "SMTP nao configurado; email nao enviado | to=%s | subject=%s",
-            to_email,
+            mask_email(to_email),
             subject,
         )
         return False
@@ -57,5 +58,5 @@ def send_email(*, to_email: str, subject: str, body: str) -> bool:
             smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
         smtp.send_message(message)
 
-    logger.info("Email aceito pelo SMTP | to=%s | subject=%s", to_email, subject)
+    logger.info("Email aceito pelo SMTP | to=%s | subject=%s", mask_email(to_email), subject)
     return True

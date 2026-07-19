@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 PURPOSE_PASSWORD_CHANGE = "password_change"
 PURPOSE_EMAIL_CHANGE = "email_change"
+PURPOSE_PASSWORD_RECOVERY = "password_recovery"
 MAX_VERIFICATION_ATTEMPTS = 5
 
 
@@ -80,6 +81,9 @@ def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]
     if purpose == PURPOSE_EMAIL_CHANGE:
         subject = "Confirme a alteração de email - HelpWeb Health"
         action = "alterar o email da sua conta"
+    elif purpose == PURPOSE_PASSWORD_RECOVERY:
+        subject = "Recupere sua senha - HelpWeb Health"
+        action = "recuperar o acesso à sua conta"
     else:
         subject = "Confirme a alteração de senha - HelpWeb Health"
         action = "alterar a senha da sua conta"
@@ -106,7 +110,8 @@ def create_account_verification(
     Cria um código temporário e invalida códigos anteriores do mesmo fluxo.
 
     Retorna True quando o email foi enviado por SMTP. Se SMTP não estiver
-    configurado, retorna False e registra o código no log para teste local.
+    configurado, retorna False. O código só aparece em log quando
+    ALLOW_LOG_VERIFICATION_CODES=true, opção voltada a teste local.
     """
     normalized_target = _normalize_target(target_value)
     now = _now()
@@ -166,12 +171,18 @@ def create_account_verification(
         logger.exception("Falha ao enviar codigo de verificacao por email")
         email_sent = False
 
-    if not email_sent:
+    if not email_sent and settings.ALLOW_LOG_VERIFICATION_CODES:
         logger.warning(
             "Codigo de verificacao gerado em modo local | user_id=%s | purpose=%s | code=%s",
             user.id,
             purpose,
             code,
+        )
+    elif not email_sent:
+        logger.warning(
+            "Codigo de verificacao gerado mas nao exibido em log | user_id=%s | purpose=%s",
+            user.id,
+            purpose,
         )
 
     return email_sent
@@ -199,14 +210,31 @@ def consume_account_verification(
     )
 
     if not verification or _is_expired(verification.expires_at):
+        logger.warning(
+            "Codigo de verificacao ausente ou expirado | user_id=%s | purpose=%s",
+            user.id,
+            purpose,
+        )
         raise HTTPException(status_code=400, detail="Código inválido ou expirado")
 
     if verification.attempts >= MAX_VERIFICATION_ATTEMPTS:
+        logger.warning(
+            "Codigo de verificacao bloqueado por tentativas | user_id=%s | purpose=%s | attempts=%s",
+            user.id,
+            purpose,
+            verification.attempts,
+        )
         raise HTTPException(status_code=400, detail="Código bloqueado por muitas tentativas")
 
     if not hmac.compare_digest(verification.code_hash, _hash_code(code)):
         verification.attempts += 1
         db.commit()
+        logger.warning(
+            "Codigo de verificacao invalido | user_id=%s | purpose=%s | attempts=%s",
+            user.id,
+            purpose,
+            verification.attempts,
+        )
         raise HTTPException(status_code=400, detail="Código inválido")
 
     verification.used_at = _now()

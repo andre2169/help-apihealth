@@ -330,15 +330,15 @@ def list_tickets_service(
     query = db.query(Ticket)
 
     logger.info(
-        "Listagem de tickets solicitada | current_user_id=%s | role=%s | status=%s | technician_id=%s | user_id=%s | priority=%s | category=%s | sector=%s | impact=%s | order_by=%s | direction=%s | skip=%s | limit=%s",
+        "Listagem de tickets solicitada | current_user_id=%s | role=%s | status=%s | technician_id=%s | user_id=%s | priority=%s | category_set=%s | sector_set=%s | impact=%s | order_by=%s | direction=%s | skip=%s | limit=%s",
         current_user.id,
         current_user.role,
         status,
         technician_id,
         user_id,
         priority,
-        category,
-        sector,
+        bool(category),
+        bool(sector),
         operational_impact,
         order_by,
         direction,

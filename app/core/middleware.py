@@ -1,5 +1,6 @@
 import logging
 import time
+from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -13,6 +14,7 @@ from app.core.exceptions import (
     TicketPermissionDenied,
     InvalidCredentials,
 )
+from app.core.request_context import get_client_ip
 
 # Cria um logger específico para este arquivo.
 # __name__ faz o log aparecer como app.core.middleware.
@@ -21,11 +23,11 @@ logger = logging.getLogger(__name__)
 _rate_limit_buckets: dict[str, dict[str, float | int]] = {}
 
 
-def _client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+def _request_id(request: Request) -> str:
+    incoming = request.headers.get("x-request-id")
+    if incoming and len(incoming) <= 80:
+        return incoming
+    return uuid4().hex
 
 
 def _token_identity(request: Request) -> str:
@@ -91,7 +93,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         _cleanup_rate_limit_buckets(now)
         window = settings.RATE_LIMIT_WINDOW_SECONDS
         scope, max_requests = _rate_limit_scope(request)
-        client_ip = _client_ip(request)
+        client_ip = get_client_ip(request)
         identity = _token_identity(request)
         key = f"{scope}:{client_ip}:{identity}"
         bucket = _rate_limit_buckets.get(key)
@@ -124,12 +126,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
+        docs_path = request.url.path in {"/docs", "/redoc", "/openapi.json"}
 
         response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-        )
+        if docs_path and settings.ENABLE_API_DOCS:
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self' https: 'unsafe-inline'; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'none'",
+            )
+        else:
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -158,21 +167,25 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
 
         # Marca o momento em que a requisição começou.
         start_time = time.perf_counter()
+        request_id = _request_id(request)
 
         try:
             # call_next envia a requisição para o endpoint correto.
             response = await call_next(request)
+            response.headers.setdefault("X-Request-ID", request_id)
 
             # Calcula quanto tempo a requisição demorou.
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             # Log de requisição concluída com sucesso.
             logger.info(
-                "Requisição concluída | method=%s | path=%s | status_code=%s | duration_ms=%.2f",
+                "Requisição concluída | request_id=%s | method=%s | path=%s | status_code=%s | duration_ms=%.2f | ip=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 response.status_code,
                 duration_ms,
+                get_client_ip(request),
             )
 
             return response
@@ -181,7 +194,8 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             logger.warning(
-                "Ticket não encontrado | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                "Ticket não encontrado | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -191,13 +205,15 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=404,
                 content={"detail": str(e) or "Ticket não encontrado"},
+                headers={"X-Request-ID": request_id},
             )
 
         except TicketInvalidStatus as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             logger.warning(
-                "Status inválido em operação de ticket | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                "Status inválido em operação de ticket | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -207,13 +223,15 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=400,
                 content={"detail": str(e) or "Status inválido para esta ação"},
+                headers={"X-Request-ID": request_id},
             )
 
         except TicketPermissionDenied as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             logger.warning(
-                "Permissão negada | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                "Permissão negada | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -223,13 +241,15 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=403,
                 content={"detail": str(e) or "Permissão negada"},
+                headers={"X-Request-ID": request_id},
             )
 
         except InvalidCredentials as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
 
             logger.warning(
-                "Credenciais inválidas | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                "Credenciais inválidas | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -239,6 +259,7 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content={"detail": str(e) or "Credenciais inválidas"},
+                headers={"X-Request-ID": request_id},
             )
 
         except Exception as e:
@@ -247,7 +268,8 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             # exc_info=True mostra o traceback completo no terminal.
             # Isso ajuda muito a descobrir onde o erro aconteceu.
             logger.error(
-                "Erro interno inesperado | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                "Erro interno inesperado | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -258,4 +280,5 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=500,
                 content={"detail": "Erro interno do servidor"},
+                headers={"X-Request-ID": request_id},
             )

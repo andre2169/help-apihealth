@@ -16,6 +16,7 @@ DANGEROUS_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 ALLOWED_SYMBOL_CHARS = {"º", "ª", "°"}
+MAX_IMAGE_BYTES = 750_000
 
 
 def _collapse_spaces(value: str) -> str:
@@ -185,11 +186,28 @@ def validate_data_image(value: object, *, field_name: str) -> str | None:
     if not match:
         raise ValueError(f"{field_name} deve ser uma imagem PNG, JPG ou WEBP.")
 
+    image_type = match.group(1).lower()
     payload = text[match.end() :]
     try:
-        base64.b64decode(payload, validate=True)
+        decoded = base64.b64decode(payload, validate=True)
     except Exception as exc:
         raise ValueError(f"{field_name} está inválida.") from exc
+
+    if len(decoded) > MAX_IMAGE_BYTES:
+        raise ValueError(f"{field_name} ultrapassou o tamanho permitido.")
+
+    is_png = decoded.startswith(b"\x89PNG\r\n\x1a\n")
+    is_jpeg = decoded.startswith(b"\xff\xd8\xff")
+    is_webp = decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP"
+
+    if image_type == "png" and not is_png:
+        raise ValueError(f"{field_name} não parece ser uma imagem PNG válida.")
+
+    if image_type in {"jpg", "jpeg"} and not is_jpeg:
+        raise ValueError(f"{field_name} não parece ser uma imagem JPG válida.")
+
+    if image_type == "webp" and not is_webp:
+        raise ValueError(f"{field_name} não parece ser uma imagem WEBP válida.")
 
     return text
 
