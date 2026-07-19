@@ -42,12 +42,12 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Troca de senha e email protegida por codigo temporario enviado por email.
 - Recuperacao de conta com resposta publica generica para reduzir enumeracao de usuarios.
 - Logout com revogacao do JWT atual por `jti`.
-- Rate limit global em memoria por IP + usuario/token, alem do bloqueio especifico de falhas no login.
+- Rate limit global em memoria por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP+conta e por conta.
 - Headers de seguranca contra clickjacking e exposicao indevida de respostas.
 - Logs de SMTP mascaram o email de destino.
 - Logs podem ser emitidos em texto simples ou JSON por `LOG_FORMAT`.
 - Tentativas de codigo invalido/expirado ficam registradas para auditoria sem salvar o codigo digitado.
-- Logs e rate limit usam `X-Forwarded-For`, `X-Real-IP` ou `CF-Connecting-IP` quando a API esta atras de proxy.
+- Headers de proxy so sao usados para identificar IP quando `TRUSTED_PROXY_HOPS` e configurado explicitamente.
 - Swagger/OpenAPI desligado por padrao em producao e com protecao opcional por usuario/senha quando habilitado.
 - Health check publico simples, sem expor diagnostico do banco por padrao.
 - Controle de permissao por perfil.
@@ -72,7 +72,6 @@ helphealth-api/
     schemas/          Schemas Pydantic
     services/         Regras de negocio
   alembic/            Migracoes do banco
-  scripts/            Seeds e comandos auxiliares
   main.py             Entrada da aplicacao
   requirements.txt    Dependencias Python
   .env.example        Exemplo de variaveis de ambiente
@@ -108,6 +107,7 @@ VERIFICATION_RESEND_COOLDOWN_SECONDS=300
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS=240
 RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
+TRUSTED_PROXY_HOPS=0
 ```
 
 Descricao:
@@ -131,6 +131,7 @@ Descricao:
 - `RATE_LIMIT_WINDOW_SECONDS`: janela, em segundos, usada no rate limit global.
 - `RATE_LIMIT_MAX_REQUESTS`: maximo de requisicoes gerais por IP + usuario/token dentro da janela.
 - `RATE_LIMIT_SENSITIVE_MAX_REQUESTS`: maximo para rotas sensiveis, como auth, cadastro, admin e alteracoes.
+- `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para ler `X-Forwarded-For`. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esse header corretamente.
 
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
@@ -205,11 +206,14 @@ alembic upgrade head
 - Cada JWT possui `jti`; ao fazer logout, o token atual entra na tabela `token_blocklist` ate expirar.
 - Endpoints autenticados rejeitam tokens expirados, sem `jti` ou revogados.
 - Login usa mensagem generica para reduzir enumeracao de usuario.
+- Login executa uma verificacao bcrypt equivalente mesmo quando o email nao existe, reduzindo enumeracao por diferenca de tempo.
+- Bloqueio de login considera tambem a conta/e-mail, nao apenas IP, reduzindo bypass por spoofing de cabecalho.
 - Cadastro publico tambem evita confirmar diretamente se um email ja existe.
 - Listagens usam respostas resumidas para nao trafegar imagem/base64 ou descricao completa sem necessidade.
 - Timeline de chamados nao expõe email do autor, apenas dados minimos para identificar o registro.
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
+- IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
 - Quando `ENABLE_API_DOCS=true`, a documentacao pode ser protegida por `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`.
 - `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
@@ -239,18 +243,11 @@ Esse fluxo usa a mesma tabela de verificacao temporaria de email/senha, com prop
 
 ## Logs e privacidade
 
-Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. A API tambem tenta registrar o IP real encaminhado pelo proxy da hospedagem usando `X-Forwarded-For`, `X-Real-IP` ou `CF-Connecting-IP`, caindo para o IP da conexao apenas quando esses cabecalhos nao existem.
+Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. Por seguranca, a API ignora `X-Forwarded-For`, `X-Real-IP` e `CF-Connecting-IP` por padrao. Configure `TRUSTED_PROXY_HOPS=1` apenas depois de confirmar o comportamento do proxy da hospedagem.
 
-## Seeds para demonstracao
+## Admin inicial
 
-Para criar usuarios e chamados de exemplo:
-
-```bash
-python -m scripts.seed_users
-python -m scripts.seed_tickets
-```
-
-Os dados simulam cenarios de suporte tecnico em saude publica, como UTI, recepcao, laboratorio, farmacia, pronto atendimento, equipamentos de impressao, rede e sistemas internos.
+O administrador inicial e criado automaticamente na primeira execucao usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`. Scripts de seed de usuarios/chamados de demonstracao foram removidos para evitar credenciais fixas em codigo versionado.
 
 ## Deploy na Shard
 
@@ -278,6 +275,7 @@ MAIL_FROM=remetente_verificado@seudominio.com
 MAIL_FROM_NAME=HelpWeb Health
 REPLY_TO_EMAIL=
 VERIFICATION_RESEND_COOLDOWN_SECONDS=300
+TRUSTED_PROXY_HOPS=0
 ```
 
 No Brevo, `MAIL_FROM` precisa ser um remetente verificado ou pertencer a um dominio autenticado. Se o SMTP aceitar mas o email nao chegar, confira os logs transacionais da Brevo para ver se o evento ficou como `Delivered`, `Blocked`, `Deferred`, `Soft bounce` ou `Hard bounce`.

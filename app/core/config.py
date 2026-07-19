@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_MAX_REQUESTS: int = 240
     RATE_LIMIT_SENSITIVE_MAX_REQUESTS: int = 40
+    # Use 0 para ignorar headers enviados pelo cliente. Se a hospedagem
+    # confirmar um proxy confiavel adicionando X-Forwarded-For, use 1.
+    TRUSTED_PROXY_HOPS: int = 0
 
     @property
     def allowed_origins(self) -> list[str]:

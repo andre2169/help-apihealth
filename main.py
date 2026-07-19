@@ -5,7 +5,7 @@ import sys
 import uvicorn
 
 from app.main import app
-from scripts.seed import create_admin
+from app.services.bootstrap_service import create_initial_admin
 
 
 def run_migrations() -> None:
@@ -17,7 +17,7 @@ def run_migrations() -> None:
 
 if __name__ == "__main__":
     run_migrations()
-    create_admin()
+    create_initial_admin()
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

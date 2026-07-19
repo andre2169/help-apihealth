@@ -122,7 +122,6 @@ def create_account_verification(
         .filter(
             AccountVerification.user_id == user.id,
             AccountVerification.purpose == purpose,
-            AccountVerification.target_value == normalized_target,
             AccountVerification.used_at.is_(None),
         )
         .order_by(AccountVerification.created_at.desc())

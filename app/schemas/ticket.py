@@ -23,7 +23,6 @@ class TicketBase(BaseModel):
     operational_impact: TicketImpact = TicketImpact.medium
     issue_image: Optional[str] = Field(default=None, max_length=1_500_000)
     issue_images: list[str] = Field(default_factory=list, max_length=3)
-    sla_hours: Optional[int] = Field(default=None, ge=1, le=720)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -75,6 +74,7 @@ class TicketResponse(TicketBase):
     status: str
     user_id: int
     technician_id: Optional[int]
+    sla_hours: int
     owner_name: Optional[str] = None
     technician_name: Optional[str] = None
     created_at: datetime

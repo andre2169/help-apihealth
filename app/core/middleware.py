@@ -13,6 +13,9 @@ from app.core.exceptions import (
     TicketInvalidStatus,
     TicketPermissionDenied,
     InvalidCredentials,
+    InvalidUserRole,
+    UserAlreadyExists,
+    UserNotFound,
 )
 from app.core.request_context import get_client_ip
 
@@ -259,6 +262,42 @@ class ExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content={"detail": str(e) or "Credenciais inválidas"},
+                headers={"X-Request-ID": request_id},
+            )
+
+        except UserNotFound as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+
+            logger.warning(
+                "Usuário não encontrado | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                duration_ms,
+                str(e) or "Usuário não encontrado",
+            )
+
+            return JSONResponse(
+                status_code=404,
+                content={"detail": str(e) or "Usuário não encontrado"},
+                headers={"X-Request-ID": request_id},
+            )
+
+        except (InvalidUserRole, UserAlreadyExists) as e:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+
+            logger.warning(
+                "Erro de validação de usuário | request_id=%s | method=%s | path=%s | duration_ms=%.2f | error=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                duration_ms,
+                str(e) or "Dados de usuário inválidos",
+            )
+
+            return JSONResponse(
+                status_code=400,
+                content={"detail": str(e) or "Dados de usuário inválidos"},
                 headers={"X-Request-ID": request_id},
             )
 
