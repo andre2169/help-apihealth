@@ -16,7 +16,7 @@ DANGEROUS_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 ALLOWED_SYMBOL_CHARS = {"º", "ª", "°"}
-MAX_IMAGE_BYTES = 750_000
+MAX_IMAGE_BYTES = 1_200_000
 
 
 def _collapse_spaces(value: str) -> str:
@@ -217,7 +217,7 @@ def validate_data_images(
     *,
     field_name: str,
     max_items: int = 3,
-    max_total_chars: int = 1_500_000,
+    max_total_chars: int = 2_600_000,
 ) -> list[str]:
     if value in (None, ""):
         return []

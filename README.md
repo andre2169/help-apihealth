@@ -56,7 +56,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - SQLite para desenvolvimento, testes e deploy simples.
 - Estrutura preparada para migrar futuramente para PostgreSQL ou MySQL.
 - Chamados com setor, categoria, equipamento, codigo de patrimonio, impacto operacional e SLA.
-- Foto opcional do problema no chamado.
+- Ate 3 fotos opcionais do problema no chamado, recebidas ja compactadas pelo frontend e validadas novamente no backend.
 - Foto de perfil do usuario.
 - Timeline de eventos e comentarios.
 - Relatorios por periodo, status, prioridade, setor, categoria, equipamento, impacto, SLA, idade da fila, volume diario, solicitantes recorrentes e reaberturas.
@@ -84,7 +84,7 @@ Crie um arquivo `.env` na raiz da API usando `.env.example` como base:
 
 ```env
 DATABASE_URL=sqlite:///./helphealth.db
-SECRET_KEY=exemplo_troque_por_uma_chave_longa_e_secreta
+SECRET_KEY=exemplo_troque_por_uma_chave_longa_com_mais_de_32_caracteres
 ADMIN_EMAIL=admin.exemplo@helpwebhealth.local
 ADMIN_PASSWORD=troque_esta_senha_antes_de_publicar
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -113,7 +113,7 @@ RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
 Descricao:
 
 - `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`.
-- `SECRET_KEY`: chave usada para assinar tokens JWT. Em producao, use uma chave longa e secreta.
+- `SECRET_KEY`: chave usada para assinar tokens JWT. Em producao, use uma chave aleatoria com pelo menos 32 caracteres; uma chave curta gera alerta `InsecureKeyLengthWarning` e enfraquece a assinatura dos tokens.
 - `ADMIN_EMAIL`: e-mail inicial do administrador criado automaticamente.
 - `ADMIN_PASSWORD`: senha inicial do administrador.
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
@@ -213,7 +213,7 @@ alembic upgrade head
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
 - Quando `ENABLE_API_DOCS=true`, a documentacao pode ser protegida por `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`.
 - `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
-- Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho.
+- Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho. O limite foi ajustado para aceitar fotos de celular compactadas sem permitir imagens brutas excessivas no banco SQLite.
 - Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
 - O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
 - Em 19/07/2026, as dependencias de producao do `requirements.txt` foram atualizadas e auditadas com `pip-audit`, sem vulnerabilidades conhecidas no resultado.
@@ -258,7 +258,7 @@ Configure as variaveis de ambiente pelo painel da Shard:
 
 ```env
 DATABASE_URL=sqlite:///./helphealth.db
-SECRET_KEY=gere_uma_chave_longa_e_secreta
+SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
 ADMIN_EMAIL=email_do_administrador
 ADMIN_PASSWORD=senha_inicial_forte_do_administrador
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app

@@ -59,8 +59,10 @@ class UserCreate(UserBase):
         return validate_short_text(value, field_name="Unidade", max_length=80)
 
 
-class UserResponse(UserBase):
+class UserResponse(BaseModel):
     id: int
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
     role: str
     phone: Optional[str] = None
     job_title: Optional[str] = None
