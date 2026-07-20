@@ -4,8 +4,10 @@ import sys
 
 import uvicorn
 
+from app.core.config import settings
 from app.main import app
 from app.services.bootstrap_service import create_initial_admin
+from app.services.startup_lock import startup_lock
 
 
 def run_migrations() -> None:
@@ -16,8 +18,11 @@ def run_migrations() -> None:
 
 
 if __name__ == "__main__":
-    run_migrations()
-    create_initial_admin()
+    with startup_lock():
+        if settings.RUN_MIGRATIONS_ON_STARTUP:
+            run_migrations()
+        create_initial_admin()
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

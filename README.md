@@ -53,7 +53,8 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Controle de permissao por perfil.
 - SQLAlchemy ORM para facilitar migracao futura de banco.
 - Alembic para versionamento do schema.
-- SQLite para desenvolvimento, testes e deploy simples.
+- SQLite para desenvolvimento, testes e deploy simples em instancia unica.
+- Lock de inicializacao para reduzir corrida entre migracoes/admin inicial quando mais de um processo sobe ao mesmo tempo.
 - Estrutura preparada para migrar futuramente para PostgreSQL ou MySQL.
 - Chamados com setor, categoria, equipamento, codigo de patrimonio, impacto operacional e SLA.
 - Ate 3 fotos opcionais do problema no chamado, recebidas ja compactadas pelo frontend e validadas novamente no backend.
@@ -74,6 +75,7 @@ helphealth-api/
   alembic/            Migracoes do banco
   main.py             Entrada da aplicacao
   requirements.txt    Dependencias Python
+  requirements-postgres.txt Dependencia opcional para PostgreSQL
   .env.example        Exemplo de variaveis de ambiente
 ```
 
@@ -83,9 +85,9 @@ Crie um arquivo `.env` na raiz da API usando `.env.example` como base:
 
 ```env
 DATABASE_URL=sqlite:///./helphealth.db
-SECRET_KEY=exemplo_troque_por_uma_chave_longa_com_mais_de_32_caracteres
+SECRET_KEY=coloque_uma_chave_aleatoria_real_com_32_ou_mais_caracteres
 ADMIN_EMAIL=admin.exemplo@helpwebhealth.local
-ADMIN_PASSWORD=troque_esta_senha_antes_de_publicar
+ADMIN_PASSWORD=troque_por_uma_senha_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
@@ -108,18 +110,22 @@ RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS=240
 RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
 TRUSTED_PROXY_HOPS=0
+RUN_MIGRATIONS_ON_STARTUP=true
+STARTUP_LOCK_PATH=
+STARTUP_LOCK_TIMEOUT_SECONDS=120
+STARTUP_LOCK_STALE_SECONDS=300
 ```
 
 Descricao:
 
 - `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`.
-- `SECRET_KEY`: chave usada para assinar tokens JWT. Em producao, use uma chave aleatoria com pelo menos 32 caracteres; uma chave curta gera alerta `InsecureKeyLengthWarning` e enfraquece a assinatura dos tokens.
+- `SECRET_KEY`: chave usada para assinar tokens JWT. A API recusa iniciar com chave de exemplo ou menor que 32 caracteres.
 - `ADMIN_EMAIL`: e-mail inicial do administrador criado automaticamente.
-- `ADMIN_PASSWORD`: senha inicial do administrador.
+- `ADMIN_PASSWORD`: senha inicial do administrador. A API recusa iniciar com senha de exemplo ou menor que 12 caracteres.
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
 - `ENABLE_API_DOCS`: libera `/docs`, `/redoc` e `/openapi.json`. Use `true` apenas em desenvolvimento local.
 - `ENABLE_DB_HEALTH_ENDPOINT`: libera `/health/db`. Em producao, mantenha `false` e use apenas `/health` como rota publica.
-- `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`: protegem a documentacao por autenticacao basica quando `ENABLE_API_DOCS=true`. Se a senha ficar vazia, a documentacao habilitada fica sem senha; evite isso em producao.
+- `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`: protegem a documentacao por autenticacao basica quando `ENABLE_API_DOCS=true`. A API recusa iniciar docs habilitada sem senha.
 - `LOG_LEVEL`: nivel minimo dos logs, como `INFO`, `WARNING` ou `ERROR`.
 - `LOG_FORMAT`: use `text` para leitura simples ou `json` para monitoramento externo.
 - `ALLOW_LOG_VERIFICATION_CODES`: se `true`, permite exibir codigos de verificacao nos logs para teste local. Em producao, mantenha `false`.
@@ -132,6 +138,10 @@ Descricao:
 - `RATE_LIMIT_MAX_REQUESTS`: maximo de requisicoes gerais por IP + usuario/token dentro da janela.
 - `RATE_LIMIT_SENSITIVE_MAX_REQUESTS`: maximo para rotas sensiveis, como auth, cadastro, admin e alteracoes.
 - `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para ler `X-Forwarded-For`. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esse header corretamente.
+- `RUN_MIGRATIONS_ON_STARTUP`: controla se `main.py` aplica migracoes automaticamente ao iniciar. No deploy simples da Shard, mantenha `true`.
+- `STARTUP_LOCK_PATH`: caminho opcional do arquivo de lock de inicializacao. Se vazio e o banco for SQLite, o lock fica ao lado do `.db`.
+- `STARTUP_LOCK_TIMEOUT_SECONDS`: tempo maximo aguardando outro processo terminar migracao/admin inicial.
+- `STARTUP_LOCK_STALE_SECONDS`: idade minima para considerar um lock abandonado.
 
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
@@ -192,7 +202,9 @@ http://127.0.0.1:8000/docs
 
 ## Migracoes do banco
 
-O projeto usa Alembic. Ao iniciar pelo `main.py`, as migracoes sao aplicadas automaticamente.
+O projeto usa Alembic. Ao iniciar pelo `main.py`, as migracoes sao aplicadas automaticamente quando `RUN_MIGRATIONS_ON_STARTUP=true`.
+
+No deploy simples com SQLite, `main.py` usa um lock de arquivo antes de rodar migracoes e criar o admin inicial. Isso reduz risco de corrida se a hospedagem iniciar mais de um processo ao mesmo tempo. Em um deploy mais maduro, especialmente com PostgreSQL e CI/CD, prefira rodar `alembic upgrade head` como etapa separada do deploy e usar `RUN_MIGRATIONS_ON_STARTUP=false`.
 
 Para aplicar manualmente:
 
@@ -205,6 +217,7 @@ alembic upgrade head
 - Tokens JWT trafegam pelo header `Authorization: Bearer`.
 - Cada JWT possui `jti`; ao fazer logout, o token atual entra na tabela `token_blocklist` ate expirar.
 - Endpoints autenticados rejeitam tokens expirados, sem `jti` ou revogados.
+- A aplicacao recusa iniciar com `SECRET_KEY` fraca/de exemplo ou `ADMIN_PASSWORD` fraca/de exemplo.
 - Login usa mensagem generica para reduzir enumeracao de usuario.
 - Login executa uma verificacao bcrypt equivalente mesmo quando o email nao existe, reduzindo enumeracao por diferenca de tempo.
 - Bloqueio de login considera tambem a conta/e-mail, nao apenas IP, reduzindo bypass por spoofing de cabecalho.
@@ -215,13 +228,15 @@ alembic upgrade head
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
 - IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
-- Quando `ENABLE_API_DOCS=true`, a documentacao pode ser protegida por `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`.
+- Quando `ENABLE_API_DOCS=true`, a documentacao precisa de `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`; sem senha, a API nao inicia.
 - `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
 - Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho. O limite foi ajustado para aceitar fotos de celular compactadas sem permitir imagens brutas excessivas no banco SQLite.
 - Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
 - O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
 - Em 19/07/2026, as dependencias de producao do `requirements.txt` foram atualizadas e auditadas com `pip-audit`, sem vulnerabilidades conhecidas no resultado.
 - O projeto usa SQLite no deploy simples. O arquivo do banco nao e criptografado integralmente por padrao; para criptografia em repouso completa, use SQLCipher ou banco gerenciado com criptografia quando migrar para PostgreSQL/MySQL.
+- O driver PostgreSQL fica em `requirements-postgres.txt` e nao no pacote principal usado com SQLite.
+- O repositorio inclui workflow de GitHub Actions para compilar o backend e executar `pip-audit`.
 
 ## Recuperacao de conta
 
@@ -257,7 +272,7 @@ Configure as variaveis de ambiente pelo painel da Shard:
 DATABASE_URL=sqlite:///./helphealth.db
 SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
 ADMIN_EMAIL=email_do_administrador
-ADMIN_PASSWORD=senha_inicial_forte_do_administrador
+ADMIN_PASSWORD=senha_inicial_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
@@ -276,6 +291,9 @@ MAIL_FROM_NAME=HelpWeb Health
 REPLY_TO_EMAIL=
 VERIFICATION_RESEND_COOLDOWN_SECONDS=300
 TRUSTED_PROXY_HOPS=0
+RUN_MIGRATIONS_ON_STARTUP=true
+STARTUP_LOCK_TIMEOUT_SECONDS=120
+STARTUP_LOCK_STALE_SECONDS=300
 ```
 
 No Brevo, `MAIL_FROM` precisa ser um remetente verificado ou pertencer a um dominio autenticado. Se o SMTP aceitar mas o email nao chegar, confira os logs transacionais da Brevo para ver se o evento ficou como `Delivered`, `Blocked`, `Deferred`, `Soft bounce` ou `Hard bounce`.
