@@ -35,10 +35,15 @@ def _request_id(request: Request) -> str:
 
 def _token_identity(request: Request) -> str:
     authorization = request.headers.get("authorization", "")
-    if not authorization.lower().startswith("bearer "):
+    if authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    else:
+        token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+
+    if not token:
         return "anon"
 
-    payload = decode_access_token(authorization.split(" ", 1)[1].strip())
+    payload = decode_access_token(token)
     if payload and payload.get("sub"):
         return f"user:{payload['sub']}"
     return "anon"
@@ -122,6 +127,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Muitas requisições. Tente novamente em instantes."},
                 headers={"Retry-After": str(retry_after)},
             )
+
+        return await call_next(request)
+
+
+class OriginCheckMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin")
+            if origin:
+                normalized_origin = origin.rstrip("/")
+                if normalized_origin not in settings.allowed_origins:
+                    logger.warning(
+                        "Origem bloqueada | method=%s | path=%s | origin=%s | ip=%s",
+                        request.method,
+                        request.url.path,
+                        normalized_origin,
+                        get_client_ip(request),
+                    )
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Origem não autorizada."},
+                    )
 
         return await call_next(request)
 

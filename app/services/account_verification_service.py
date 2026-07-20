@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 PURPOSE_PASSWORD_CHANGE = "password_change"
 PURPOSE_EMAIL_CHANGE = "email_change"
 PURPOSE_PASSWORD_RECOVERY = "password_recovery"
+PURPOSE_EMAIL_VERIFICATION = "email_verification"
 MAX_VERIFICATION_ATTEMPTS = 5
 
 
@@ -81,6 +82,9 @@ def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]
     if purpose == PURPOSE_EMAIL_CHANGE:
         subject = "Confirme a alteração de email - HelpWeb Health"
         action = "alterar o email da sua conta"
+    elif purpose == PURPOSE_EMAIL_VERIFICATION:
+        subject = "Confirme seu cadastro - HelpWeb Health"
+        action = "confirmar seu cadastro"
     elif purpose == PURPOSE_PASSWORD_RECOVERY:
         subject = "Recupere sua senha - HelpWeb Health"
         action = "recuperar o acesso à sua conta"

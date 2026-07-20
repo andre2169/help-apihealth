@@ -46,6 +46,6 @@ class AccountRecoveryConfirm(BaseModel):
         return validate_password(value)
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class LoginResponse(BaseModel):
+    status: str = "ok"
+    token_type: str = "cookie"

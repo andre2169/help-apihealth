@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
 from app.db.models.user import User
-from app.schemas.user import UserAdminResponse, UserAdminUpdate
+from app.schemas.user import UserAdminListResponse, UserAdminResponse, UserAdminUpdate
 
 from app.core.permissions import require_admin
 from app.core.exceptions import TicketPermissionDenied
+from app.core.request_context import get_client_ip, mask_email
 
 from app.services.admin_service import (
     list_users_service,
@@ -33,7 +34,7 @@ def _http_error(exc: Exception):
 
 @router.get(
     "/users",
-    response_model=list[UserAdminResponse],
+    response_model=list[UserAdminListResponse],
 )
 def list_users(
     db: Session = Depends(get_db),
@@ -59,20 +60,34 @@ def get_user(
 
 @router.patch(
     "/users/{user_id}/role",
-    response_model=UserAdminResponse,
+    response_model=UserAdminListResponse,
 )
 def change_user_role(
+    request: Request,
     user_id: int,
     role: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
     try:
-        return change_user_role_service(
+        user = change_user_role_service(
             db=db,
             user_id=user_id,
             role=role,
+            actor=current_user,
+            ip_address=get_client_ip(request),
         )
+        return {
+            "id": user.id,
+            "name": user.name,
+            "email_masked": mask_email(user.email),
+            "role": user.role,
+            "email_verified": bool(user.email_verified),
+            "job_title": user.job_title,
+            "department": user.department,
+            "unit_name": user.unit_name,
+            "created_at": user.created_at,
+        }
     except Exception as e:
         _http_error(e)
 
@@ -82,6 +97,7 @@ def change_user_role(
     response_model=UserAdminResponse,
 )
 def update_user(
+    request: Request,
     user_id: int,
     user_in: UserAdminUpdate,
     db: Session = Depends(get_db),
@@ -98,6 +114,8 @@ def update_user(
             department=user_in.department,
             unit_name=user_in.unit_name,
             notification_preference=user_in.notification_preference,
+            actor=current_user,
+            ip_address=get_client_ip(request),
         )
     except Exception as e:
         _http_error(e)
@@ -108,6 +126,7 @@ def update_user(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_user(
+    request: Request,
     user_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
@@ -117,6 +136,7 @@ def delete_user(
             db=db,
             user_id=user_id,
             current_user=current_user,
+            ip_address=get_client_ip(request),
         )
     except Exception as e:
         _http_error(e)

@@ -18,11 +18,19 @@ class Settings(BaseSettings):
 
     # Banco de dados
     DATABASE_URL: str
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT_SECONDS: int = 30
+    DB_POOL_RECYCLE_SECONDS: int = 1800
 
     # JWT
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    AUTH_COOKIE_NAME: str = "helpwebhealth_session"
+    AUTH_COOKIE_SECURE: bool = True
+    AUTH_COOKIE_SAMESITE: str = "strict"
+    AUTH_COOKIE_DOMAIN: str | None = None
 
     # Seed / admin inicial
     ADMIN_EMAIL: str = "admin@admin.com"
@@ -56,11 +64,16 @@ class Settings(BaseSettings):
     REPLY_TO_EMAIL: str | None = None
     EMAIL_CODE_EXPIRE_MINUTES: int = 15
     VERIFICATION_RESEND_COOLDOWN_SECONDS: int = 300
+    ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS: float = 1.2
+    ACCOUNT_RECOVERY_WINDOW_SECONDS: int = 900
+    ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL: int = 5
+    ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP: int = 20
 
     # Rate limit em memória. Funciona bem para o deploy simples em uma instância.
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_MAX_REQUESTS: int = 240
     RATE_LIMIT_SENSITIVE_MAX_REQUESTS: int = 40
+    MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY: int = 12
     # Use 0 para ignorar headers enviados pelo cliente. Se a hospedagem
     # confirmar um proxy confiavel adicionando X-Forwarded-For, use 1.
     TRUSTED_PROXY_HOPS: int = 0
@@ -94,6 +107,41 @@ class Settings(BaseSettings):
 
         if self.TRUSTED_PROXY_HOPS < 0:
             raise ValueError("TRUSTED_PROXY_HOPS nao pode ser negativo.")
+
+        if self.DB_POOL_SIZE < 1:
+            raise ValueError("DB_POOL_SIZE precisa ser maior que zero.")
+
+        if self.DB_MAX_OVERFLOW < 0:
+            raise ValueError("DB_MAX_OVERFLOW nao pode ser negativo.")
+
+        if self.DB_POOL_TIMEOUT_SECONDS < 1:
+            raise ValueError("DB_POOL_TIMEOUT_SECONDS precisa ser maior que zero.")
+
+        if self.DB_POOL_RECYCLE_SECONDS < 60:
+            raise ValueError("DB_POOL_RECYCLE_SECONDS precisa ter pelo menos 60 segundos.")
+
+        same_site = self.AUTH_COOKIE_SAMESITE.strip().lower()
+        if same_site not in {"strict", "lax", "none"}:
+            raise ValueError("AUTH_COOKIE_SAMESITE deve ser strict, lax ou none.")
+        self.AUTH_COOKIE_SAMESITE = same_site
+
+        if same_site == "none" and not self.AUTH_COOKIE_SECURE:
+            raise ValueError("AUTH_COOKIE_SAMESITE=none exige AUTH_COOKIE_SECURE=true.")
+
+        if self.ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS < 0:
+            raise ValueError("ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS nao pode ser negativo.")
+
+        if self.ACCOUNT_RECOVERY_WINDOW_SECONDS < 60:
+            raise ValueError("ACCOUNT_RECOVERY_WINDOW_SECONDS precisa ter pelo menos 60 segundos.")
+
+        if self.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL < 1:
+            raise ValueError("ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL precisa ser maior que zero.")
+
+        if self.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP < 1:
+            raise ValueError("ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP precisa ser maior que zero.")
+
+        if self.MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY < 1:
+            raise ValueError("MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY precisa ser maior que zero.")
 
         if self.STARTUP_LOCK_TIMEOUT_SECONDS < 1:
             raise ValueError("STARTUP_LOCK_TIMEOUT_SECONDS precisa ser maior que zero.")

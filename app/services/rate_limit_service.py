@@ -14,6 +14,7 @@ from typing import Any
 # }
 #
 failed_logins: dict[str, dict[str, Any]] = {}
+action_limits: dict[str, dict[str, Any]] = {}
 
 # Quantidade máxima de erros permitidos
 MAX_ATTEMPTS = 5
@@ -128,3 +129,49 @@ def clear_failed_login(ip: str, email: str):
     """
     for key in _keys_for(ip, email):
         failed_logins.pop(key, None)
+
+
+def consume_action_rate_limit(
+    *,
+    action: str,
+    key: str,
+    max_requests: int,
+    window_seconds: int,
+) -> bool:
+    """
+    Rate limit leve para fluxos sensiveis sem gravar no SQLite a cada request.
+
+    Retorna True quando a acao pode seguir. Retorna False quando a chave
+    excedeu o limite da janela atual.
+    """
+    now = datetime.utcnow()
+    normalized_key = f"{action}:{key.strip().lower()}"
+    window = timedelta(seconds=window_seconds)
+
+    if len(action_limits) >= MAX_TRACKED_KEYS:
+        expired_keys = [
+            bucket_key
+            for bucket_key, data in action_limits.items()
+            if now - data.get("window_start", now) > window
+        ]
+        for bucket_key in expired_keys:
+            action_limits.pop(bucket_key, None)
+
+    data = action_limits.get(
+        normalized_key,
+        {
+            "count": 0,
+            "window_start": now,
+        },
+    )
+
+    if now - data["window_start"] > window:
+        data = {
+            "count": 0,
+            "window_start": now,
+        }
+
+    data["count"] += 1
+    action_limits[normalized_key] = data
+
+    return data["count"] <= max_requests

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.security import hash_password
@@ -27,6 +28,9 @@ def create_initial_admin() -> None:
             email=admin_email,
             password_hash=hash_password(settings.ADMIN_PASSWORD),
             role="admin",
+            email_verified=True,
+            email_verified_at=datetime.now(timezone.utc),
+            session_version=1,
         )
 
         db.add(admin)

@@ -237,6 +237,39 @@ def _reopen_events_count(db: Session, query):
     )
 
 
+def _percent(part: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return round((part / total) * 100)
+
+
+def _report_summary_metrics(*, status_counts: dict, sla: dict, queue_snapshot: dict, reopen_events_count: int):
+    total_analyzed = sum(int(value or 0) for value in status_counts.values())
+    active_total = (
+        int(status_counts.get("open", 0) or 0)
+        + int(status_counts.get("reopened", 0) or 0)
+        + int(status_counts.get("in_progress", 0) or 0)
+    )
+    completed_total = int(status_counts.get("resolved", 0) or 0) + int(status_counts.get("closed", 0) or 0)
+    sla_resolved_total = int(sla.get("resolved_total", 0) or 0)
+    sla_within_total = int(sla.get("within_sla", 0) or 0)
+
+    return {
+        "total_analyzed": total_analyzed,
+        "active_total": active_total,
+        "completed_total": completed_total,
+        "completed_percent": _percent(completed_total, total_analyzed),
+        "sla_resolved_total": sla_resolved_total,
+        "sla_within_total": sla_within_total,
+        "sla_within_percent": _percent(sla_within_total, sla_resolved_total),
+        "avg_resolution_hours": round(int(sla.get("avg_resolution_minutes", 0) or 0) / 60),
+        "unassigned_active_total": int(queue_snapshot.get("Sem técnico", 0) or 0),
+        "critical_active_total": int(queue_snapshot.get("Críticos ativos", 0) or 0),
+        "high_priority_active_total": int(queue_snapshot.get("Alta prioridade ativa", 0) or 0),
+        "reopen_events_count": int(reopen_events_count or 0),
+    }
+
+
 def dashboard_summary_service(*, db: Session, current_user: User):
     query = _visible_tickets_query(db, current_user)
 
@@ -324,6 +357,12 @@ def reports_overview_service(
     queue_snapshot = _queue_snapshot(query)
     reopen_events_count = _reopen_events_count(db, query)
     sla = _sla_metrics(query)
+    summary_metrics = _report_summary_metrics(
+        status_counts=status_counts,
+        sla=sla,
+        queue_snapshot=queue_snapshot,
+        reopen_events_count=reopen_events_count,
+    )
 
     technician_rows = []
     if current_user.role in ["technician", "admin"]:
@@ -363,6 +402,7 @@ def reports_overview_service(
         "active_age_counts": active_age_counts,
         "queue_snapshot": queue_snapshot,
         "reopen_events_count": reopen_events_count,
+        "summary_metrics": summary_metrics,
         "sla": sla,
         "filters": {
             "start_date": start_date.isoformat() if start_date else None,

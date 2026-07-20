@@ -2,22 +2,31 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
-
-
-def normalize_database_url(database_url: str) -> str:
-    if database_url.startswith("postgres://"):
-        return database_url.replace("postgres://", "postgresql://", 1)
-    return database_url
+from app.db.url import normalize_database_url
 
 
 database_url = normalize_database_url(settings.DATABASE_URL)
-connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+
+engine_options = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+
+if database_url.startswith("sqlite"):
+    engine_options["connect_args"] = {"check_same_thread": False}
+else:
+    engine_options.update(
+        {
+            "pool_size": settings.DB_POOL_SIZE,
+            "max_overflow": settings.DB_MAX_OVERFLOW,
+            "pool_timeout": settings.DB_POOL_TIMEOUT_SECONDS,
+            "pool_recycle": settings.DB_POOL_RECYCLE_SECONDS,
+        }
+    )
 
 engine = create_engine(
     database_url,
-    echo=False,
-    pool_pre_ping=True,
-    connect_args=connect_args,
+    **engine_options,
 )
 
 SessionLocal = sessionmaker(

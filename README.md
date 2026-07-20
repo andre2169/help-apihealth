@@ -37,6 +37,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 ## Principais recursos
 
 - API REST com FastAPI.
+- Regras sensiveis centralizadas no backend: permissao, SLA, mudanca de status, filtros, limites de upload, verificacao de email, rate limit e calculos de relatorio.
 - Autenticacao JWT com PyJWT.
 - Criptografia de senha com Passlib/Bcrypt.
 - Troca de senha e email protegida por codigo temporario enviado por email.
@@ -55,7 +56,8 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Alembic para versionamento do schema.
 - SQLite para desenvolvimento, testes e deploy simples em instancia unica.
 - Lock de inicializacao para reduzir corrida entre migracoes/admin inicial quando mais de um processo sobe ao mesmo tempo.
-- Estrutura preparada para migrar futuramente para PostgreSQL ou MySQL.
+- Suporte direto a SQLite no desenvolvimento e PostgreSQL no deploy.
+- Pool de conexoes configuravel para reduzir latencia com PostgreSQL.
 - Chamados com setor, categoria, equipamento, codigo de patrimonio, impacto operacional e SLA.
 - Ate 3 fotos opcionais do problema no chamado, recebidas ja compactadas pelo frontend e validadas novamente no backend.
 - Foto de perfil do usuario.
@@ -75,7 +77,8 @@ helphealth-api/
   alembic/            Migracoes do banco
   main.py             Entrada da aplicacao
   requirements.txt    Dependencias Python
-  requirements-postgres.txt Dependencia opcional para PostgreSQL
+  requirements-postgres.txt Atalho compativel para instalacao das dependencias
+  tools/             Utilitarios locais, incluindo migracao SQLite -> PostgreSQL
   .env.example        Exemplo de variaveis de ambiente
 ```
 
@@ -85,7 +88,17 @@ Crie um arquivo `.env` na raiz da API usando `.env.example` como base:
 
 ```env
 DATABASE_URL=sqlite:///./helphealth.db
+# Para PostgreSQL na hospedagem:
+# DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+DB_POOL_TIMEOUT_SECONDS=30
+DB_POOL_RECYCLE_SECONDS=1800
 SECRET_KEY=coloque_uma_chave_aleatoria_real_com_32_ou_mais_caracteres
+AUTH_COOKIE_NAME=helpwebhealth_session
+AUTH_COOKIE_SECURE=false
+AUTH_COOKIE_SAMESITE=lax
+AUTH_COOKIE_DOMAIN=
 ADMIN_EMAIL=admin.exemplo@helpwebhealth.local
 ADMIN_PASSWORD=troque_por_uma_senha_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -120,8 +133,16 @@ STARTUP_LOCK_STALE_SECONDS=300
 
 Descricao:
 
-- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`.
+- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pela Shard, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. Se a Shard entregar `postgres://` ou `?ssl=true`, a aplicacao normaliza automaticamente para `postgresql://` com `sslmode=require`.
+- `DB_POOL_SIZE`: quantidade de conexoes permanentes mantidas no pool quando o banco nao for SQLite.
+- `DB_MAX_OVERFLOW`: conexoes extras permitidas quando o pool estiver cheio.
+- `DB_POOL_TIMEOUT_SECONDS`: tempo maximo aguardando uma conexao livre do pool.
+- `DB_POOL_RECYCLE_SECONDS`: tempo para reciclar conexoes antigas e evitar conexao morta em banco gerenciado.
 - `SECRET_KEY`: chave usada para assinar tokens JWT. A API recusa iniciar com chave de exemplo ou menor que 32 caracteres.
+- `AUTH_COOKIE_NAME`: nome do cookie HttpOnly usado para sessao.
+- `AUTH_COOKIE_SECURE`: use `false` somente em teste local HTTP. Em producao HTTPS, use `true`.
+- `AUTH_COOKIE_SAMESITE`: use `lax` em teste local. Se frontend e API ficarem em subdominios diferentes na Shard, use `none` junto com `AUTH_COOKIE_SECURE=true`.
+- `AUTH_COOKIE_DOMAIN`: normalmente fica vazio. Configure dominio compartilhado apenas se souber exatamente o dominio-base aceito pelo navegador.
 - `ADMIN_EMAIL`: e-mail inicial do administrador criado automaticamente.
 - `ADMIN_PASSWORD`: senha inicial do administrador. A API recusa iniciar com senha de exemplo ou menor que 12 caracteres.
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
@@ -227,17 +248,49 @@ O projeto usa Alembic. Ao iniciar pelo `main.py`, as migracoes sao aplicadas aut
 
 No deploy simples com SQLite, `main.py` usa um lock de arquivo antes de rodar migracoes e criar o admin inicial. Isso reduz risco de corrida se a hospedagem iniciar mais de um processo ao mesmo tempo. Em um deploy mais maduro, especialmente com PostgreSQL e CI/CD, prefira rodar `alembic upgrade head` como etapa separada do deploy e usar `RUN_MIGRATIONS_ON_STARTUP=false`.
 
+As migrations atuais foram revisadas para funcionar tanto em SQLite quanto em PostgreSQL, incluindo campos booleanos usados na verificacao de email.
+
 Para aplicar manualmente:
 
 ```bash
 alembic upgrade head
 ```
 
+### Usando PostgreSQL na Shard
+
+No painel da API na Shard, troque apenas a variavel `DATABASE_URL` pela URL do PostgreSQL criado na plataforma. Exemplo:
+
+```env
+DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
+```
+
+Mantenha tambem:
+
+```env
+RUN_MIGRATIONS_ON_STARTUP=true
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+DB_POOL_TIMEOUT_SECONDS=30
+DB_POOL_RECYCLE_SECONDS=1800
+```
+
+Depois reinicie ou faça novo deploy da API. Na primeira subida com o banco vazio, o Alembic cria as tabelas e o `main.py` cria o admin inicial usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`.
+
+Se voce quiser preservar os dados do SQLite antigo, rode primeiro em ambiente local ou em um terminal seguro:
+
+```bash
+python tools/migrate_sqlite_to_postgres.py --sqlite sqlite:///./helphealth.db --postgres "postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require"
+```
+
+O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` somente se tiver certeza de que pode limpar o destino antes da copia.
+
 ## Seguranca aplicada
 
-- Tokens JWT trafegam pelo header `Authorization: Bearer`.
+- A sessao principal do frontend usa cookie HttpOnly, Secure e SameSite, emitido pela API.
+- O backend ainda consegue validar token Bearer para compatibilidade tecnica, mas o frontend nao salva JWT em `localStorage` ou `sessionStorage`.
 - Cada JWT possui `jti`; ao fazer logout, o token atual entra na tabela `token_blocklist` ate expirar.
-- Endpoints autenticados rejeitam tokens expirados, sem `jti` ou revogados.
+- Endpoints autenticados rejeitam tokens expirados, sem `jti`, revogados ou emitidos antes da versao atual de sessao do usuario.
+- Troca/recuperacao de senha e alteracao administrativa de papel/email invalidam sessoes antigas pelo campo `session_version`.
 - A aplicacao recusa iniciar com `SECRET_KEY` fraca/de exemplo ou `ADMIN_PASSWORD` fraca/de exemplo.
 - Login usa mensagem generica para reduzir enumeracao de usuario.
 - Login executa uma verificacao bcrypt equivalente mesmo quando o email nao existe, reduzindo enumeracao por diferenca de tempo.
@@ -247,6 +300,7 @@ alembic upgrade head
 - Timeline de chamados nao expõe email do autor, apenas dados minimos para identificar o registro.
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
+- Requisicoes `POST`, `PATCH`, `PUT` e `DELETE` vindas de `Origin` fora da lista autorizada sao bloqueadas tambem no middleware da API.
 - IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
 - Quando `ENABLE_API_DOCS=true`, a documentacao precisa de `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`; sem senha, a API nao inicia.
@@ -255,8 +309,12 @@ alembic upgrade head
 - Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
 - O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
 - Em 19/07/2026, as dependencias de producao do `requirements.txt` foram atualizadas e auditadas com `pip-audit`, sem vulnerabilidades conhecidas no resultado.
-- O projeto usa SQLite no deploy simples. O arquivo do banco nao e criptografado integralmente por padrao; para criptografia em repouso completa, use SQLCipher ou banco gerenciado com criptografia quando migrar para PostgreSQL/MySQL.
-- O driver PostgreSQL fica em `requirements-postgres.txt` e nao no pacote principal usado com SQLite.
+- O projeto pode usar SQLite em deploy simples, mas PostgreSQL e recomendado para ambiente real por oferecer melhor concorrencia, backup, isolamento e recursos de seguranca do banco gerenciado.
+- O arquivo SQLite nao e criptografado integralmente por padrao; para dados reais, prefira PostgreSQL gerenciado com criptografia em repouso, backup e controle de acesso.
+- A listagem administrativa de usuarios retorna email mascarado e nao envia foto/base64 em massa.
+- Novos cadastros precisam confirmar email antes de abrir chamados.
+- Eventos sensiveis sao registrados em trilha de auditoria persistente (`audit_events`) sem gravar senha, token, codigo temporario ou email completo.
+- Redis nao e obrigatorio nesta versao. Ele pode ser adotado futuramente para rate limit distribuido, cache, fila de emails e melhor suporte a varias instancias da API.
 - O repositorio inclui workflow de GitHub Actions para compilar o backend e executar `pip-audit`.
 
 ## Recuperacao de conta
@@ -290,8 +348,16 @@ O administrador inicial e criado automaticamente na primeira execucao usando `AD
 Configure as variaveis de ambiente pelo painel da Shard:
 
 ```env
-DATABASE_URL=sqlite:///./helphealth.db
+DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=10
+DB_POOL_TIMEOUT_SECONDS=30
+DB_POOL_RECYCLE_SECONDS=1800
 SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
+AUTH_COOKIE_NAME=helpwebhealth_session
+AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SAMESITE=none
+AUTH_COOKIE_DOMAIN=
 ADMIN_EMAIL=email_do_administrador
 ADMIN_PASSWORD=senha_inicial_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app

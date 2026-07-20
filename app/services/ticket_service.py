@@ -4,13 +4,15 @@ from sqlalchemy.orm import Session, aliased
 from app.db.models.ticket import Ticket
 from app.core.events import create_ticket_event
 from app.db.models.user import User
-from sqlalchemy import case
+from sqlalchemy import case, or_
 import logging
+from app.core.config import settings
 from app.core.exceptions import (
     TicketNotFound,
     TicketInvalidStatus,
     TicketPermissionDenied,
 )
+from app.services.audit_service import record_audit_event
 
 # loggs do sistema
 logger = logging.getLogger(__name__)
@@ -71,13 +73,42 @@ def _due_at(hours: int) -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=hours)
 
 
+def _ensure_ticket_image_quota(*, db: Session, current_user: User, issue_images: list[str]) -> None:
+    if not issue_images:
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    tickets_with_images = (
+        db.query(Ticket.id)
+        .filter(
+            Ticket.user_id == current_user.id,
+            Ticket.created_at >= since,
+            or_(
+                Ticket.issue_image.is_not(None),
+                Ticket.issue_images.is_not(None),
+            ),
+        )
+        .count()
+    )
+
+    if tickets_with_images >= settings.MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY:
+        raise TicketInvalidStatus(
+            "Limite diário de chamados com imagens atingido. Tente novamente mais tarde ou abra o chamado sem fotos."
+        )
+
+
 def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Ticket:
+    if not current_user.email_verified:
+        raise TicketPermissionDenied("Confirme seu email antes de abrir chamados.")
+
     impact = _value(ticket_in.operational_impact)
     priority = _value(ticket_in.priority)
     sla_hours = _sla_hours_for(impact, priority)
     issue_images = list(ticket_in.issue_images or [])
     if not issue_images and ticket_in.issue_image:
         issue_images = [ticket_in.issue_image]
+
+    _ensure_ticket_image_quota(db=db, current_user=current_user, issue_images=issue_images)
 
     ticket = Ticket(
         title=ticket_in.title,
@@ -107,6 +138,14 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
         user_id=current_user.id,
         event_type="CREATED",
         to_status="open",
+    )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.created",
+        target_type="ticket",
+        target_id=ticket.id,
+        details={"has_images": bool(issue_images), "priority": priority, "impact": impact},
     )
 
     db.commit()
@@ -138,6 +177,13 @@ def assign_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         event_type="ASSIGNED",
         from_status=old_status,
         to_status="in_progress",
+    )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.assigned",
+        target_type="ticket",
+        target_id=ticket.id,
     )
 
     db.commit()
@@ -174,6 +220,13 @@ def resolve_ticket_service(*, db: Session, ticket_id: int, current_user: User) -
         event_type="RESOLVED",
         from_status=old_status,
         to_status="resolved",
+    )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.resolved",
+        target_type="ticket",
+        target_id=ticket.id,
     )
 
     db.commit()
@@ -217,6 +270,13 @@ def close_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> 
         from_status=old_status,
         to_status="closed",
     )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.closed",
+        target_type="ticket",
+        target_id=ticket.id,
+    )
 
     db.commit()
     db.refresh(ticket)
@@ -248,6 +308,13 @@ def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     )
 
     db.delete(ticket)
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.deleted",
+        target_type="ticket",
+        target_id=ticket_id,
+    )
     db.commit()
 
 
@@ -295,6 +362,13 @@ def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         event_type="REOPENED",
         from_status=old_status,
         to_status="reopened",
+    )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.reopened",
+        target_type="ticket",
+        target_id=ticket.id,
     )
 
     db.commit()

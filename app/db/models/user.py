@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -21,6 +21,9 @@ class User(Base):
 
     # Segurança
     password_hash = Column(String, nullable=False)
+    session_version = Column(Integer, nullable=False, default=1)
+    email_verified = Column(Boolean, nullable=False, default=False, index=True)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
 
     # user | technician | admin
     role = Column(String(20), default="user", index=True)

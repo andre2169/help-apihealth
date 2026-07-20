@@ -64,6 +64,7 @@ class UserResponse(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: EmailStr
     role: str
+    email_verified: bool = False
     phone: Optional[str] = None
     job_title: Optional[str] = None
     department: Optional[str] = None
@@ -80,6 +81,7 @@ class UserAdminResponse(BaseModel):
     name: str
     email: EmailStr
     role: str
+    email_verified: bool = False
     phone: Optional[str] = None
     job_title: Optional[str] = None
     department: Optional[str] = None
@@ -90,6 +92,18 @@ class UserAdminResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserAdminListResponse(BaseModel):
+    id: int
+    name: str
+    email_masked: str
+    role: str
+    email_verified: bool = False
+    job_title: Optional[str] = None
+    department: Optional[str] = None
+    unit_name: Optional[str] = None
+    created_at: datetime
 
 
 class UserAdminUpdate(BaseModel):
@@ -236,3 +250,7 @@ class EmailChangeConfirm(BaseModel):
     @classmethod
     def clean_confirm_new_email(cls, value):
         return normalize_email_address(value, check_deliverability=True)
+
+
+class EmailVerificationConfirm(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
