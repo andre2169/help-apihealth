@@ -1,5 +1,6 @@
 import logging
 import smtplib
+import ssl
 from email.utils import formataddr, formatdate
 from email.message import EmailMessage
 
@@ -8,6 +9,20 @@ from app.core.request_context import mask_email
 
 
 logger = logging.getLogger(__name__)
+
+
+def _smtp_password() -> str | None:
+    """
+    O Google exibe a senha de app em blocos com espacos. Para Gmail, removemos
+    esses espacos antes do login sem alterar senhas de outros provedores SMTP.
+    """
+    if not settings.SMTP_PASSWORD:
+        return None
+
+    if (settings.SMTP_HOST or "").strip().lower() == "smtp.gmail.com":
+        return settings.SMTP_PASSWORD.replace(" ", "")
+
+    return settings.SMTP_PASSWORD
 
 
 def _html_body(body: str) -> str:
@@ -51,12 +66,37 @@ def send_email(*, to_email: str, subject: str, body: str) -> bool:
     message.set_content(body)
     message.add_alternative(_html_body(body), subtype="html")
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as smtp:
+    context = ssl.create_default_context()
+    password = _smtp_password()
+
+    if settings.SMTP_USE_SSL:
+        smtp_client = smtplib.SMTP_SSL(
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            timeout=settings.SMTP_TIMEOUT_SECONDS,
+            context=context,
+        )
+    else:
+        smtp_client = smtplib.SMTP(
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            timeout=settings.SMTP_TIMEOUT_SECONDS,
+        )
+
+    with smtp_client as smtp:
         if settings.SMTP_USE_TLS:
-            smtp.starttls()
-        if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
-            smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+            smtp.starttls(context=context)
+        if settings.SMTP_USERNAME and password:
+            smtp.login(settings.SMTP_USERNAME, password)
         smtp.send_message(message)
 
-    logger.info("Email aceito pelo SMTP | to=%s | subject=%s", mask_email(to_email), subject)
+    logger.info(
+        "Email aceito pelo SMTP | host=%s | port=%s | tls=%s | ssl=%s | to=%s | subject=%s",
+        settings.SMTP_HOST,
+        settings.SMTP_PORT,
+        settings.SMTP_USE_TLS,
+        settings.SMTP_USE_SSL,
+        mask_email(to_email),
+        subject,
+    )
     return True

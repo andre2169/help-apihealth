@@ -96,14 +96,16 @@ API_DOCS_PASSWORD=
 LOG_LEVEL=INFO
 LOG_FORMAT=text
 ALLOW_LOG_VERIFICATION_CODES=false
-SMTP_HOST=
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=
-SMTP_PASSWORD=
+SMTP_USERNAME=suporte.helpwebhealth@gmail.com
+SMTP_PASSWORD=senha_de_app_do_gmail_sem_espacos
 SMTP_USE_TLS=true
-MAIL_FROM=
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=30
+MAIL_FROM=suporte.helpwebhealth@gmail.com
 MAIL_FROM_NAME=HelpWeb Health
-REPLY_TO_EMAIL=
+REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
 EMAIL_CODE_EXPIRE_MINUTES=15
 VERIFICATION_RESEND_COOLDOWN_SECONDS=300
 RATE_LIMIT_WINDOW_SECONDS=60
@@ -129,7 +131,7 @@ Descricao:
 - `LOG_LEVEL`: nivel minimo dos logs, como `INFO`, `WARNING` ou `ERROR`.
 - `LOG_FORMAT`: use `text` para leitura simples ou `json` para monitoramento externo.
 - `ALLOW_LOG_VERIFICATION_CODES`: se `true`, permite exibir codigos de verificacao nos logs para teste local. Em producao, mantenha `false`.
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` e `MAIL_FROM`: configuracao do servidor de email usado para enviar codigos de verificacao.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SMTP_USE_SSL`, `SMTP_TIMEOUT_SECONDS` e `MAIL_FROM`: configuracao do servidor de email usado para enviar codigos de verificacao. Para Gmail, use `smtp.gmail.com`, porta `587`, `SMTP_USE_TLS=true` e senha de app.
 - `MAIL_FROM_NAME`: nome exibido como remetente do email.
 - `REPLY_TO_EMAIL`: email opcional para resposta/suporte. Pode ficar vazio.
 - `EMAIL_CODE_EXPIRE_MINUTES`: tempo de validade dos codigos temporarios.
@@ -146,6 +148,25 @@ Descricao:
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
 Se o SMTP nao estiver configurado, a API gera o codigo, mas nao exibe o codigo nos logs por padrao. Para teste local, e possivel ativar `ALLOW_LOG_VERIFICATION_CODES=true`. Em producao, configure um SMTP real e mantenha essa opcao desligada.
+
+### SMTP com Gmail
+
+Para usar a conta `suporte.helpwebhealth@gmail.com`, ative a verificacao em duas etapas na conta Google e gere uma senha de app. No painel da Shard, configure:
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=suporte.helpwebhealth@gmail.com
+SMTP_PASSWORD=sua_senha_de_app_do_google_sem_espacos
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=30
+MAIL_FROM=suporte.helpwebhealth@gmail.com
+MAIL_FROM_NAME=HelpWeb Health
+REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
+```
+
+Use a senha de app de 16 caracteres, nao a senha normal da conta Google. Se voce copiar a senha com espacos, a API remove os espacos automaticamente quando `SMTP_HOST=smtp.gmail.com`, mas o ideal e salvar sem espacos no painel.
 
 ## Como rodar localmente
 
@@ -281,14 +302,16 @@ API_DOCS_PASSWORD=
 LOG_LEVEL=INFO
 LOG_FORMAT=text
 ALLOW_LOG_VERIFICATION_CODES=false
-SMTP_HOST=smtp.seu-provedor.com
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=usuario_smtp
-SMTP_PASSWORD=senha_smtp
+SMTP_USERNAME=suporte.helpwebhealth@gmail.com
+SMTP_PASSWORD=senha_de_app_do_gmail_sem_espacos
 SMTP_USE_TLS=true
-MAIL_FROM=remetente_verificado@seudominio.com
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=30
+MAIL_FROM=suporte.helpwebhealth@gmail.com
 MAIL_FROM_NAME=HelpWeb Health
-REPLY_TO_EMAIL=
+REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
 VERIFICATION_RESEND_COOLDOWN_SECONDS=300
 TRUSTED_PROXY_HOPS=0
 RUN_MIGRATIONS_ON_STARTUP=true
@@ -296,7 +319,7 @@ STARTUP_LOCK_TIMEOUT_SECONDS=120
 STARTUP_LOCK_STALE_SECONDS=300
 ```
 
-No Brevo, `MAIL_FROM` precisa ser um remetente verificado ou pertencer a um dominio autenticado. Se o SMTP aceitar mas o email nao chegar, confira os logs transacionais da Brevo para ver se o evento ficou como `Delivered`, `Blocked`, `Deferred`, `Soft bounce` ou `Hard bounce`.
+No Gmail, `SMTP_USERNAME` e `MAIL_FROM` devem usar o email completo da conta. A senha deve ser uma senha de app criada na conta Google, nunca a senha normal de login.
 
 Comando de inicializacao:
 

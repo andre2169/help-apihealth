@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: str | None = None
     SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 30
     MAIL_FROM: str | None = None
     MAIL_FROM_NAME: str = "HelpWeb Health"
     REPLY_TO_EMAIL: str | None = None
@@ -101,6 +103,26 @@ class Settings(BaseSettings):
                 "STARTUP_LOCK_STALE_SECONDS precisa ser maior ou igual ao timeout do lock."
             )
 
+        if self.SMTP_USE_TLS and self.SMTP_USE_SSL:
+            raise ValueError("Use apenas SMTP_USE_TLS ou SMTP_USE_SSL, nunca os dois juntos.")
+
+        if self.SMTP_HOST:
+            smtp_host = self.SMTP_HOST.strip().lower()
+            if self.SMTP_TIMEOUT_SECONDS < 5:
+                raise ValueError("SMTP_TIMEOUT_SECONDS precisa ser maior ou igual a 5.")
+
+            if smtp_host == "smtp.gmail.com":
+                if not (self.SMTP_USERNAME and self.SMTP_PASSWORD):
+                    raise ValueError(
+                        "Gmail SMTP exige SMTP_USERNAME e SMTP_PASSWORD com senha de app."
+                    )
+                if self.SMTP_PORT == 587 and not self.SMTP_USE_TLS:
+                    raise ValueError("Gmail na porta 587 exige SMTP_USE_TLS=true.")
+                if self.SMTP_PORT == 465 and not self.SMTP_USE_SSL:
+                    raise ValueError("Gmail na porta 465 exige SMTP_USE_SSL=true.")
+                if self.SMTP_PORT not in {465, 587}:
+                    raise ValueError("Gmail SMTP deve usar porta 587 com TLS ou 465 com SSL.")
+
         return self
 
     @property
@@ -120,7 +142,12 @@ class Settings(BaseSettings):
 
     @property
     def smtp_configured(self) -> bool:
-        return bool(self.SMTP_HOST and self.MAIL_FROM)
+        return bool(
+            self.SMTP_HOST
+            and self.MAIL_FROM
+            and self.SMTP_USERNAME
+            and self.SMTP_PASSWORD
+        )
 
 
 settings = Settings()
