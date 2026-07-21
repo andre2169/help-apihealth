@@ -22,6 +22,7 @@ from app.api.v1 import (
     auth,
     admin,
     dashboard,
+    notifications,
     reports,
 )
 
@@ -91,6 +92,7 @@ app.include_router(tickets.router, prefix="/api/v1")
 app.include_router(comments.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
 
 

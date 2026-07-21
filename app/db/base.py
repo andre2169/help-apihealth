@@ -10,3 +10,4 @@ from app.db.models.ticket_event import TicketEvent
 from app.db.models.account_verification import AccountVerification
 from app.db.models.token_blocklist import TokenBlocklist
 from app.db.models.audit_event import AuditEvent
+from app.db.models.notification import Notification

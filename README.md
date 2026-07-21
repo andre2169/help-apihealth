@@ -19,6 +19,7 @@ A API centraliza o ciclo de vida dos chamados:
 - acompanhamento por status;
 - atribuicao e resolucao por tecnicos;
 - comentarios e linha do tempo;
+- notificacoes internas para equipe tecnica quando chamados sao criados ou reabertos;
 - controle de perfis de acesso;
 - indicadores para dashboard e relatorios filtrados.
 
@@ -62,6 +63,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Ate 3 fotos opcionais do problema no chamado, recebidas ja compactadas pelo frontend e validadas novamente no backend.
 - Foto de perfil do usuario.
 - Timeline de eventos e comentarios.
+- Notificacoes persistentes por usuario para tecnicos e administradores.
 - Relatorios por periodo, status, prioridade, setor, categoria, equipamento, impacto, SLA, idade da fila, volume diario, solicitantes recorrentes e reaberturas.
 
 ## Estrutura principal
@@ -297,6 +299,8 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Bloqueio de login considera tambem a conta/e-mail, nao apenas IP, reduzindo bypass por spoofing de cabecalho.
 - Cadastro publico tambem evita confirmar diretamente se um email ja existe.
 - Listagens usam respostas resumidas para nao trafegar imagem/base64 ou descricao completa sem necessidade.
+- Notificacoes sao salvas por destinatario e retornadas apenas para o usuario autenticado, evitando IDOR.
+- Notificacoes de chamados nao carregam descricao completa, imagem, email ou dados sensiveis; mostram apenas resumo curto com setor e titulo.
 - Timeline de chamados nao expõe email do autor, apenas dados minimos para identificar o registro.
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
@@ -334,6 +338,26 @@ POST /api/v1/auth/password/recovery/confirm
 ```
 
 Esse fluxo usa a mesma tabela de verificacao temporaria de email/senha, com proposito separado para recuperacao.
+
+## Notificacoes internas
+
+Quando um funcionario abre um chamado ou reabre um chamado resolvido/fechado, a API cria notificacoes para usuarios com perfil `technician` e `admin`. A regra fica no backend, nao no frontend.
+
+Endpoints:
+
+```text
+GET /api/v1/notifications/
+PATCH /api/v1/notifications/{notification_id}/read
+PATCH /api/v1/notifications/read-all
+```
+
+Regras principais:
+
+- cada notificacao possui um `recipient_id`;
+- a listagem sempre filtra pelo usuario autenticado;
+- marcar como lida tambem exige que a notificacao pertenca ao usuario logado;
+- o limite de retorno vai ate 50 registros por chamada;
+- notificacoes relacionadas a tickets ou usuarios removidos sao limpas/ajustadas pelos servicos de negocio.
 
 ## Logs e privacidade
 

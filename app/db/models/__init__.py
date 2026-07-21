@@ -5,3 +5,4 @@ from app.db.models.ticket import Ticket
 from app.db.models.ticket_event import TicketEvent
 from app.db.models.token_blocklist import TokenBlocklist
 from app.db.models.user import User
+from app.db.models.notification import Notification

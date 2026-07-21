@@ -13,6 +13,10 @@ from app.core.exceptions import (
     TicketPermissionDenied,
 )
 from app.services.audit_service import record_audit_event
+from app.services.notification_service import (
+    delete_notifications_for_tickets,
+    remove_user_from_notifications,
+)
 
 
 VALID_ROLES = ["user", "technician", "admin"]
@@ -155,6 +159,7 @@ def delete_user_service(
     ]
 
     if owned_ticket_ids:
+        delete_notifications_for_tickets(db=db, ticket_ids=owned_ticket_ids)
         db.query(Comment).filter(Comment.ticket_id.in_(owned_ticket_ids)).delete(
             synchronize_session=False
         )
@@ -178,6 +183,7 @@ def delete_user_service(
     db.query(TokenBlocklist).filter(TokenBlocklist.user_id == user.id).delete(
         synchronize_session=False
     )
+    remove_user_from_notifications(db=db, user_id=user.id)
     db.query(AuditEvent).filter(AuditEvent.actor_id == user.id).update(
         {AuditEvent.actor_id: None},
         synchronize_session=False,

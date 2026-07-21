@@ -13,6 +13,11 @@ from app.core.exceptions import (
     TicketPermissionDenied,
 )
 from app.services.audit_service import record_audit_event
+from app.services.notification_service import (
+    delete_notifications_for_ticket,
+    notify_support_users_about_new_ticket,
+    notify_support_users_about_reopened_ticket,
+)
 
 # loggs do sistema
 logger = logging.getLogger(__name__)
@@ -147,14 +152,20 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
         target_id=ticket.id,
         details={"has_images": bool(issue_images), "priority": priority, "impact": impact},
     )
+    notifications_created = notify_support_users_about_new_ticket(
+        db=db,
+        ticket=ticket,
+        actor=current_user,
+    )
 
     db.commit()
 
     logger.info(
-        "Ticket criado | ticket_id=%s | user_id=%s | status=%s",
+        "Ticket criado | ticket_id=%s | user_id=%s | status=%s | notifications=%s",
         ticket.id,
         current_user.id,
         ticket.status,
+        notifications_created,
     )
 
     return ticket
@@ -307,6 +318,7 @@ def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         current_user.id,
     )
 
+    delete_notifications_for_ticket(db=db, ticket_id=ticket.id)
     db.delete(ticket)
     record_audit_event(
         db,
@@ -370,16 +382,22 @@ def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         target_type="ticket",
         target_id=ticket.id,
     )
+    notifications_created = notify_support_users_about_reopened_ticket(
+        db=db,
+        ticket=ticket,
+        actor=current_user,
+    )
 
     db.commit()
     db.refresh(ticket)
 
     logger.info(
-        "Ticket reaberto | ticket_id=%s | user_id=%s | from_status=%s | to_status=%s",
+        "Ticket reaberto | ticket_id=%s | user_id=%s | from_status=%s | to_status=%s | notifications=%s",
         ticket.id,
         current_user.id,
         old_status,
         ticket.status,
+        notifications_created,
     )
 
     return ticket
