@@ -73,6 +73,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_MAX_REQUESTS: int = 240
     RATE_LIMIT_SENSITIVE_MAX_REQUESTS: int = 40
+    RATE_LIMIT_PUBLIC_MAX_REQUESTS: int = 120
+    RATE_LIMIT_POLLING_MAX_REQUESTS: int = 80
+    REDIS_URL: str | None = None
+    REDIS_RATE_LIMIT_PREFIX: str = "helpwebhealth:rate"
+    REDIS_CONNECT_TIMEOUT_SECONDS: float = 1.0
+    REDIS_OPERATION_TIMEOUT_SECONDS: float = 1.0
+    MAX_CONCURRENT_REQUESTS: int = 80
+    CONCURRENCY_WAIT_TIMEOUT_SECONDS: float = 0.25
+    MAX_REQUEST_BODY_BYTES: int = 6_000_000
+    MAX_REQUEST_URL_BYTES: int = 2048
+    MAX_REQUEST_HEADER_BYTES: int = 32_000
+    MAX_REQUEST_HEADER_VALUE_BYTES: int = 8_000
     MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY: int = 12
     # Use 0 para ignorar headers enviados pelo cliente. Se a hospedagem
     # confirmar um proxy confiavel adicionando X-Forwarded-For, use 1.
@@ -99,6 +111,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ADMIN_PASSWORD insegura. Use uma senha inicial forte com pelo menos 12 caracteres."
             )
+
+        if self.AUTH_COOKIE_DOMAIN is not None and not self.AUTH_COOKIE_DOMAIN.strip():
+            self.AUTH_COOKIE_DOMAIN = None
+
+        if self.API_DOCS_PASSWORD is not None and not self.API_DOCS_PASSWORD.strip():
+            self.API_DOCS_PASSWORD = None
 
         if self.ENABLE_API_DOCS and not (self.API_DOCS_PASSWORD and self.API_DOCS_PASSWORD.strip()):
             raise ValueError(
@@ -139,6 +157,53 @@ class Settings(BaseSettings):
 
         if self.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP < 1:
             raise ValueError("ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP precisa ser maior que zero.")
+
+        if self.RATE_LIMIT_WINDOW_SECONDS < 1:
+            raise ValueError("RATE_LIMIT_WINDOW_SECONDS precisa ser maior que zero.")
+
+        for field_name in (
+            "RATE_LIMIT_MAX_REQUESTS",
+            "RATE_LIMIT_SENSITIVE_MAX_REQUESTS",
+            "RATE_LIMIT_PUBLIC_MAX_REQUESTS",
+            "RATE_LIMIT_POLLING_MAX_REQUESTS",
+        ):
+            if getattr(self, field_name) < 1:
+                raise ValueError(f"{field_name} precisa ser maior que zero.")
+
+        if self.REDIS_URL is not None:
+            redis_url = self.REDIS_URL.strip()
+            if not redis_url:
+                self.REDIS_URL = None
+            elif not redis_url.startswith(("redis://", "rediss://")):
+                raise ValueError("REDIS_URL deve comecar com redis:// ou rediss://.")
+            else:
+                self.REDIS_URL = redis_url
+
+        self.REDIS_RATE_LIMIT_PREFIX = self.REDIS_RATE_LIMIT_PREFIX.strip() or "helpwebhealth:rate"
+
+        if self.REDIS_CONNECT_TIMEOUT_SECONDS <= 0:
+            raise ValueError("REDIS_CONNECT_TIMEOUT_SECONDS precisa ser maior que zero.")
+
+        if self.REDIS_OPERATION_TIMEOUT_SECONDS <= 0:
+            raise ValueError("REDIS_OPERATION_TIMEOUT_SECONDS precisa ser maior que zero.")
+
+        if self.MAX_CONCURRENT_REQUESTS < 1:
+            raise ValueError("MAX_CONCURRENT_REQUESTS precisa ser maior que zero.")
+
+        if self.CONCURRENCY_WAIT_TIMEOUT_SECONDS <= 0:
+            raise ValueError("CONCURRENCY_WAIT_TIMEOUT_SECONDS precisa ser maior que zero.")
+
+        if self.MAX_REQUEST_BODY_BYTES < 100_000:
+            raise ValueError("MAX_REQUEST_BODY_BYTES precisa ter pelo menos 100000 bytes.")
+
+        if self.MAX_REQUEST_URL_BYTES < 512:
+            raise ValueError("MAX_REQUEST_URL_BYTES precisa ter pelo menos 512 bytes.")
+
+        if self.MAX_REQUEST_HEADER_BYTES < 4096:
+            raise ValueError("MAX_REQUEST_HEADER_BYTES precisa ter pelo menos 4096 bytes.")
+
+        if self.MAX_REQUEST_HEADER_VALUE_BYTES < 1024:
+            raise ValueError("MAX_REQUEST_HEADER_VALUE_BYTES precisa ter pelo menos 1024 bytes.")
 
         if self.MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY < 1:
             raise ValueError("MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY precisa ser maior que zero.")

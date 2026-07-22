@@ -126,6 +126,18 @@ VERIFICATION_RESEND_COOLDOWN_SECONDS=300
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX_REQUESTS=240
 RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
+RATE_LIMIT_PUBLIC_MAX_REQUESTS=120
+RATE_LIMIT_POLLING_MAX_REQUESTS=80
+REDIS_URL=
+REDIS_RATE_LIMIT_PREFIX=helpwebhealth:rate
+REDIS_CONNECT_TIMEOUT_SECONDS=1.0
+REDIS_OPERATION_TIMEOUT_SECONDS=1.0
+MAX_CONCURRENT_REQUESTS=80
+CONCURRENCY_WAIT_TIMEOUT_SECONDS=0.25
+MAX_REQUEST_BODY_BYTES=6000000
+MAX_REQUEST_URL_BYTES=2048
+MAX_REQUEST_HEADER_BYTES=32000
+MAX_REQUEST_HEADER_VALUE_BYTES=8000
 TRUSTED_PROXY_HOPS=0
 RUN_MIGRATIONS_ON_STARTUP=true
 STARTUP_LOCK_PATH=
@@ -162,6 +174,17 @@ Descricao:
 - `RATE_LIMIT_WINDOW_SECONDS`: janela, em segundos, usada no rate limit global.
 - `RATE_LIMIT_MAX_REQUESTS`: maximo de requisicoes gerais por IP + usuario/token dentro da janela.
 - `RATE_LIMIT_SENSITIVE_MAX_REQUESTS`: maximo para rotas sensiveis, como auth, cadastro, admin e alteracoes.
+- `RATE_LIMIT_PUBLIC_MAX_REQUESTS`: maximo para rotas publicas, como `/` e `/health`.
+- `RATE_LIMIT_POLLING_MAX_REQUESTS`: maximo para consultas frequentes, como notificacoes.
+- `REDIS_URL`: opcional. Quando configurada, o rate limit global passa a ser compartilhado entre instancias da API. Sem Redis, o limite continua local em memoria.
+- `REDIS_RATE_LIMIT_PREFIX`: prefixo das chaves de rate limit criadas no Redis.
+- `REDIS_CONNECT_TIMEOUT_SECONDS` e `REDIS_OPERATION_TIMEOUT_SECONDS`: limites curtos para evitar que falha no Redis deixe a API lenta.
+- `MAX_CONCURRENT_REQUESTS`: quantidade maxima de requisicoes processadas ao mesmo tempo por instancia.
+- `CONCURRENCY_WAIT_TIMEOUT_SECONDS`: tempo maximo que uma requisicao aguarda vaga antes de receber 503.
+- `MAX_REQUEST_BODY_BYTES`: tamanho maximo aceito para o corpo da requisicao. O padrao considera ate 3 imagens compactadas.
+- `MAX_REQUEST_URL_BYTES`: tamanho maximo de caminho + query string.
+- `MAX_REQUEST_HEADER_BYTES`: soma maxima dos headers da requisicao.
+- `MAX_REQUEST_HEADER_VALUE_BYTES`: tamanho maximo permitido para um unico header.
 - `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para ler `X-Forwarded-For`. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esse header corretamente.
 - `RUN_MIGRATIONS_ON_STARTUP`: controla se `main.py` aplica migracoes automaticamente ao iniciar. No deploy simples da Shard, mantenha `true`.
 - `STARTUP_LOCK_PATH`: caminho opcional do arquivo de lock de inicializacao. Se vazio e o banco for SQLite, o lock fica ao lado do `.db`.
@@ -297,6 +320,10 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Login usa mensagem generica para reduzir enumeracao de usuario.
 - Login executa uma verificacao bcrypt equivalente mesmo quando o email nao existe, reduzindo enumeracao por diferenca de tempo.
 - Bloqueio de login considera tambem a conta/e-mail, nao apenas IP, reduzindo bypass por spoofing de cabecalho.
+- Rotas publicas e consultas de polling possuem limites proprios para reduzir abuso.
+- A API limita tamanho de corpo, URL e headers antes de processar a requisicao, inclusive quando o corpo chega em stream sem `Content-Length`.
+- A API possui limite de concorrencia por instancia para reduzir saturacao por rajadas de requests.
+- `REDIS_URL` pode ser configurada para rate limit distribuido entre instancias. Sem Redis, a API usa limite local em memoria.
 - Cadastro publico tambem evita confirmar diretamente se um email ja existe.
 - Listagens usam respostas resumidas para nao trafegar imagem/base64 ou descricao completa sem necessidade.
 - Notificacoes sao salvas por destinatario e retornadas apenas para o usuario autenticado, evitando IDOR.
@@ -304,7 +331,7 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Timeline de chamados nao expõe email do autor, apenas dados minimos para identificar o registro.
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
-- Requisicoes `POST`, `PATCH`, `PUT` e `DELETE` vindas de `Origin` fora da lista autorizada sao bloqueadas tambem no middleware da API.
+- Requisicoes para `/api/` vindas de `Origin` fora da lista autorizada sao bloqueadas tambem no middleware da API.
 - IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
 - Quando `ENABLE_API_DOCS=true`, a documentacao precisa de `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`; sem senha, a API nao inicia.
@@ -318,7 +345,7 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - A listagem administrativa de usuarios retorna email mascarado e nao envia foto/base64 em massa.
 - Novos cadastros precisam confirmar email antes de abrir chamados.
 - Eventos sensiveis sao registrados em trilha de auditoria persistente (`audit_events`) sem gravar senha, token, codigo temporario ou email completo.
-- Redis nao e obrigatorio nesta versao. Ele pode ser adotado futuramente para rate limit distribuido, cache, fila de emails e melhor suporte a varias instancias da API.
+- Redis nao e obrigatorio nesta versao. Quando disponivel, pode ser configurado por `REDIS_URL` para rate limit distribuido; cache e fila de emails continuam como evolucao futura.
 - O repositorio inclui workflow de GitHub Actions para compilar o backend e executar `pip-audit`.
 
 ## Recuperacao de conta
@@ -403,6 +430,21 @@ MAIL_FROM=suporte.helpwebhealth@gmail.com
 MAIL_FROM_NAME=HelpWeb Health
 REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
 VERIFICATION_RESEND_COOLDOWN_SECONDS=300
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_MAX_REQUESTS=240
+RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
+RATE_LIMIT_PUBLIC_MAX_REQUESTS=120
+RATE_LIMIT_POLLING_MAX_REQUESTS=80
+REDIS_URL=
+REDIS_RATE_LIMIT_PREFIX=helpwebhealth:rate
+REDIS_CONNECT_TIMEOUT_SECONDS=1.0
+REDIS_OPERATION_TIMEOUT_SECONDS=1.0
+MAX_CONCURRENT_REQUESTS=80
+CONCURRENCY_WAIT_TIMEOUT_SECONDS=0.25
+MAX_REQUEST_BODY_BYTES=6000000
+MAX_REQUEST_URL_BYTES=2048
+MAX_REQUEST_HEADER_BYTES=32000
+MAX_REQUEST_HEADER_VALUE_BYTES=8000
 TRUSTED_PROXY_HOPS=0
 RUN_MIGRATIONS_ON_STARTUP=true
 STARTUP_LOCK_TIMEOUT_SECONDS=120
