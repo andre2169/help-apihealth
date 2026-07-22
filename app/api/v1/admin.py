@@ -6,6 +6,7 @@ from app.db.models.user import User
 from app.schemas.user import UserAdminListResponse, UserAdminResponse, UserAdminUpdate
 
 from app.core.permissions import require_admin
+from app.core.config import settings
 from app.core.exceptions import TicketPermissionDenied
 from app.core.request_context import get_client_ip, mask_email
 
@@ -22,6 +23,13 @@ router = APIRouter(
     tags=["Admin"],
 )
 
+PROXY_DEBUG_HEADERS = (
+    "x-forwarded-for",
+    "x-real-ip",
+    "cf-connecting-ip",
+    "forwarded",
+)
+
 
 def _http_error(exc: Exception):
     if isinstance(exc, TicketPermissionDenied):
@@ -30,6 +38,37 @@ def _http_error(exc: Exception):
             detail=str(exc),
         )
     raise exc
+
+
+@router.get("/network-debug")
+def network_debug(
+    request: Request,
+    current_user: User = Depends(require_admin),
+):
+    """
+    Mostra somente informacoes de rede necessarias para diagnosticar proxy/IP.
+
+    A rota e restrita a administradores e nao retorna cookies, Authorization
+    nem outros headers sensiveis. Use temporariamente para confirmar se a
+    hospedagem envia IP real por X-Forwarded-For, X-Real-IP ou CF-Connecting-IP.
+    """
+    if not settings.ENABLE_NETWORK_DEBUG_ENDPOINT:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recurso nao encontrado.",
+        )
+
+    headers = {
+        header_name: request.headers.get(header_name)
+        for header_name in PROXY_DEBUG_HEADERS
+    }
+
+    return {
+        "request_client_host": request.client.host if request.client else None,
+        "resolved_client_ip": get_client_ip(request),
+        "trusted_proxy_hops": settings.TRUSTED_PROXY_HOPS,
+        "proxy_headers": headers,
+    }
 
 
 @router.get(

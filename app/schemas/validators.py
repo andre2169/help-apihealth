@@ -6,7 +6,17 @@ from email_validator import EmailNotValidError, validate_email
 
 
 PHONE_RE = re.compile(r"^\d{10,11}$")
-INTERNATIONAL_PHONE_RE = re.compile(r"^\+\d{8,15}$")
+BRAZIL_DDDS = {
+    "11", "12", "13", "14", "15", "16", "17", "18", "19",
+    "21", "22", "24", "27", "28",
+    "31", "32", "33", "34", "35", "37", "38",
+    "41", "42", "43", "44", "45", "46", "47", "48", "49",
+    "51", "53", "54", "55",
+    "61", "62", "63", "64", "65", "66", "67", "68", "69",
+    "71", "73", "74", "75", "77", "79",
+    "81", "82", "83", "84", "85", "86", "87", "88", "89",
+    "91", "92", "93", "94", "95", "96", "97", "98", "99",
+}
 NAME_RE = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[ '\-][A-Za-zÀ-ÖØ-öø-ÿ]+)*$")
 SHORT_TEXT_RE = re.compile(r"^[0-9A-Za-zÀ-ÖØ-öø-ÿºª° .,:&\-/()]+$")
 ASSET_TAG_RE = re.compile(r"^[0-9A-Za-zÀ-ÖØ-öø-ÿ ._\-/]+$")
@@ -65,33 +75,20 @@ def validate_optional_phone(value: object) -> str | None:
     if not digits:
         return None
 
-    if raw_value.startswith("+"):
-        if digits.startswith("55") and len(digits) in (12, 13):
-            national_number = digits[2:]
-        elif INTERNATIONAL_PHONE_RE.fullmatch(f"+{digits}") and len(set(digits)) > 1:
-            return f"+{digits}"
-        else:
-            raise ValueError("Informe um telefone internacional válido.")
-    elif digits.startswith("55") and len(digits) in (12, 13):
-        national_number = digits[2:]
-    elif len(digits) in (10, 11):
-        national_number = digits
-    elif INTERNATIONAL_PHONE_RE.fullmatch(f"+{digits}") and len(set(digits)) > 1:
-        return f"+{digits}"
-    else:
-        raise ValueError("Informe DDI, DDD e telefone válidos.")
+    if raw_value.startswith("+") or (digits.startswith("55") and len(digits) in (12, 13)):
+        raise ValueError("Informe somente DDD brasileiro e número, sem DDI ou +55.")
 
-    if not PHONE_RE.fullmatch(national_number):
-        raise ValueError("Informe um telefone com DDD e 10 ou 11 números.")
+    if not PHONE_RE.fullmatch(digits):
+        raise ValueError("Informe telefone brasileiro com DDD e 10 ou 11 números.")
 
-    ddd = int(national_number[:2])
-    if ddd < 11 or ddd > 99 or len(set(national_number)) == 1:
-        raise ValueError("Informe um telefone válido.")
+    ddd = digits[:2]
+    if ddd not in BRAZIL_DDDS or len(set(digits)) == 1:
+        raise ValueError("Informe um DDD brasileiro e telefone válidos.")
 
-    if len(national_number) == 11 and national_number[2] != "9":
-        raise ValueError("Celular com 11 números deve começar com 9 após o DDD.")
+    if len(digits) == 11 and digits[2] != "9":
+        raise ValueError("Celular brasileiro com 11 números deve começar com 9 após o DDD.")
 
-    return f"+55{national_number}"
+    return digits
 
 
 def validate_short_text(

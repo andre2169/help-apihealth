@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # Em producao, deixe a documentacao e o health check do banco desligados.
     ENABLE_API_DOCS: bool = False
     ENABLE_DB_HEALTH_ENDPOINT: bool = False
+    ENABLE_NETWORK_DEBUG_ENDPOINT: bool = False
     API_DOCS_USERNAME: str = "admin"
     API_DOCS_PASSWORD: str | None = None
 

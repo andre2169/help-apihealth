@@ -11,7 +11,7 @@ Importante: este projeto nao e um prontuario eletronico e nao deve armazenar dad
 A API centraliza o ciclo de vida dos chamados:
 
 - cadastro e autenticacao de usuarios;
-- perfil de usuario com telefone, funcao, setor, unidade e preferencia de notificacao;
+- perfil de usuario com telefone brasileiro validado, funcao, setor, unidade e preferencia de notificacao;
 - alteracao de email e senha com codigo temporario de verificacao;
 - recuperacao de conta por codigo enviado ao email cadastrado;
 - abertura de chamados por funcionarios;
@@ -49,7 +49,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Logs de SMTP mascaram o email de destino.
 - Logs podem ser emitidos em texto simples ou JSON por `LOG_FORMAT`.
 - Tentativas de codigo invalido/expirado ficam registradas para auditoria sem salvar o codigo digitado.
-- Headers de proxy so sao usados para identificar IP quando `TRUSTED_PROXY_HOPS` e configurado explicitamente.
+- Headers de proxy so sao usados para identificar IP quando `TRUSTED_PROXY_HOPS` e configurado explicitamente. Quando habilitado, a API prefere `CF-Connecting-IP`, depois `X-Real-IP` e por fim `X-Forwarded-For`.
 - Swagger/OpenAPI desligado por padrao em producao e com protecao opcional por usuario/senha quando habilitado.
 - Health check publico simples, sem expor diagnostico do banco por padrao.
 - Controle de permissao por perfil.
@@ -106,6 +106,7 @@ ADMIN_PASSWORD=troque_por_uma_senha_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
+ENABLE_NETWORK_DEBUG_ENDPOINT=false
 API_DOCS_USERNAME=admin
 API_DOCS_PASSWORD=
 LOG_LEVEL=INFO
@@ -162,6 +163,7 @@ Descricao:
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
 - `ENABLE_API_DOCS`: libera `/docs`, `/redoc` e `/openapi.json`. Use `true` apenas em desenvolvimento local.
 - `ENABLE_DB_HEALTH_ENDPOINT`: libera `/health/db`. Em producao, mantenha `false` e use apenas `/health` como rota publica.
+- `ENABLE_NETWORK_DEBUG_ENDPOINT`: libera `/api/v1/admin/network-debug` para diagnostico temporario de IP/proxy. Em producao, mantenha `false`.
 - `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`: protegem a documentacao por autenticacao basica quando `ENABLE_API_DOCS=true`. A API recusa iniciar docs habilitada sem senha.
 - `LOG_LEVEL`: nivel minimo dos logs, como `INFO`, `WARNING` ou `ERROR`.
 - `LOG_FORMAT`: use `text` para leitura simples ou `json` para monitoramento externo.
@@ -185,7 +187,7 @@ Descricao:
 - `MAX_REQUEST_URL_BYTES`: tamanho maximo de caminho + query string.
 - `MAX_REQUEST_HEADER_BYTES`: soma maxima dos headers da requisicao.
 - `MAX_REQUEST_HEADER_VALUE_BYTES`: tamanho maximo permitido para um unico header.
-- `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para ler `X-Forwarded-For`. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esse header corretamente.
+- `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para aceitar headers de IP real. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esses headers corretamente.
 - `RUN_MIGRATIONS_ON_STARTUP`: controla se `main.py` aplica migracoes automaticamente ao iniciar. No deploy simples da Shard, mantenha `true`.
 - `STARTUP_LOCK_PATH`: caminho opcional do arquivo de lock de inicializacao. Se vazio e o banco for SQLite, o lock fica ao lado do `.db`.
 - `STARTUP_LOCK_TIMEOUT_SECONDS`: tempo maximo aguardando outro processo terminar migracao/admin inicial.
@@ -332,7 +334,7 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Rotas usam ORM SQLAlchemy e enums/whitelists para filtros e ordenacao, evitando SQL dinamico.
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
 - Requisicoes para `/api/` vindas de `Origin` fora da lista autorizada sao bloqueadas tambem no middleware da API.
-- IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado.
+- IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado. A ordem de preferencia e `CF-Connecting-IP`, `X-Real-IP` e `X-Forwarded-For`.
 - `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
 - Quando `ENABLE_API_DOCS=true`, a documentacao precisa de `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`; sem senha, a API nao inicia.
 - `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
@@ -343,6 +345,8 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - O projeto pode usar SQLite em deploy simples, mas PostgreSQL e recomendado para ambiente real por oferecer melhor concorrencia, backup, isolamento e recursos de seguranca do banco gerenciado.
 - O arquivo SQLite nao e criptografado integralmente por padrao; para dados reais, prefira PostgreSQL gerenciado com criptografia em repouso, backup e controle de acesso.
 - A listagem administrativa de usuarios retorna email mascarado e nao envia foto/base64 em massa.
+- Administradores podem habilitar temporariamente `/api/v1/admin/network-debug` para diagnosticar headers de proxy/IP sem expor cookies, tokens ou Authorization.
+- Telefones de perfil e cadastro aceitam apenas numeros do Brasil no formato DDD + numero, sem DDI ou `+55`.
 - Novos cadastros precisam confirmar email antes de abrir chamados.
 - Eventos sensiveis sao registrados em trilha de auditoria persistente (`audit_events`) sem gravar senha, token, codigo temporario ou email completo.
 - Redis nao e obrigatorio nesta versao. Quando disponivel, pode ser configurado por `REDIS_URL` para rate limit distribuido; cache e fila de emails continuam como evolucao futura.
@@ -386,6 +390,43 @@ Regras principais:
 - o limite de retorno vai ate 50 registros por chamada;
 - notificacoes relacionadas a tickets ou usuarios removidos sao limpas/ajustadas pelos servicos de negocio.
 
+## Diagnostico de IP real na hospedagem
+
+A rota abaixo existe para confirmar como a hospedagem encaminha o IP real do visitante para a API, mas fica desligada por padrao:
+
+```text
+GET /api/v1/admin/network-debug
+```
+
+Para usar temporariamente, configure:
+
+```env
+ENABLE_NETWORK_DEBUG_ENDPOINT=true
+```
+
+Depois do teste, volte para:
+
+```env
+ENABLE_NETWORK_DEBUG_ENDPOINT=false
+```
+
+Mesmo habilitada, ela exige login como administrador e retorna apenas:
+
+- IP da conexao recebida por Uvicorn;
+- IP resolvido pela funcao `get_client_ip`;
+- valor atual de `TRUSTED_PROXY_HOPS`;
+- headers `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP` e `Forwarded`.
+
+A rota nao retorna `Cookie`, `Authorization` nem outros headers sensiveis. Use essa informacao para decidir se `TRUSTED_PROXY_HOPS=1` e seguro. Nao habilite `TRUSTED_PROXY_HOPS=1` no chute: se a hospedagem nao sobrescrever os headers de proxy corretamente, um cliente poderia falsificar o IP e enfraquecer o rate limit.
+
+Na Shard testada em 22/07/2026, `CF-Connecting-IP` apresentou o IP publico do visitante e `X-Forwarded-For` apresentou a lista `visitante, proxy`. Por isso, apos subir esta versao, a configuracao recomendada para a Shard e:
+
+```env
+TRUSTED_PROXY_HOPS=1
+```
+
+Em uma VPS ou outra plataforma, mantenha `TRUSTED_PROXY_HOPS=0` se a API receber conexao direta. Se usar Nginx, Cloudflare, proxy reverso ou balanceador, habilite apenas depois de confirmar que o proxy remove ou sobrescreve headers enviados pelo cliente.
+
 ## Logs e privacidade
 
 Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. Por seguranca, a API ignora `X-Forwarded-For`, `X-Real-IP` e `CF-Connecting-IP` por padrao. Configure `TRUSTED_PROXY_HOPS=1` apenas depois de confirmar o comportamento do proxy da hospedagem.
@@ -414,6 +455,7 @@ ADMIN_PASSWORD=senha_inicial_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app
 ENABLE_API_DOCS=false
 ENABLE_DB_HEALTH_ENDPOINT=false
+ENABLE_NETWORK_DEBUG_ENDPOINT=false
 API_DOCS_USERNAME=admin
 API_DOCS_PASSWORD=
 LOG_LEVEL=INFO
@@ -445,7 +487,7 @@ MAX_REQUEST_BODY_BYTES=6000000
 MAX_REQUEST_URL_BYTES=2048
 MAX_REQUEST_HEADER_BYTES=32000
 MAX_REQUEST_HEADER_VALUE_BYTES=8000
-TRUSTED_PROXY_HOPS=0
+TRUSTED_PROXY_HOPS=1
 RUN_MIGRATIONS_ON_STARTUP=true
 STARTUP_LOCK_TIMEOUT_SECONDS=120
 STARTUP_LOCK_STALE_SECONDS=300

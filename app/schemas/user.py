@@ -28,7 +28,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=128)
-    phone: Optional[str] = Field(default=None, min_length=9, max_length=16)
+    phone: Optional[str] = Field(default=None, min_length=10, max_length=11)
     job_title: Optional[str] = Field(default=None, max_length=40)
     department: Optional[str] = Field(default=None, max_length=30)
     unit_name: Optional[str] = Field(default=None, max_length=80)
@@ -109,7 +109,7 @@ class UserAdminListResponse(BaseModel):
 class UserAdminUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
     email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(default=None, min_length=9, max_length=16)
+    phone: Optional[str] = Field(default=None, min_length=10, max_length=11)
     job_title: Optional[str] = Field(default=None, max_length=40)
     department: Optional[str] = Field(default=None, max_length=30)
     unit_name: Optional[str] = Field(default=None, max_length=80)
@@ -161,7 +161,7 @@ class UserAdminUpdate(BaseModel):
 
 class UserProfileUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
-    phone: Optional[str] = Field(default=None, min_length=9, max_length=16)
+    phone: Optional[str] = Field(default=None, min_length=10, max_length=11)
     job_title: Optional[str] = Field(default=None, max_length=40)
     department: Optional[str] = Field(default=None, max_length=30)
     unit_name: Optional[str] = Field(default=None, max_length=80)
