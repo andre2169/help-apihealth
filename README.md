@@ -44,7 +44,8 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Troca de senha e email protegida por codigo temporario enviado por email.
 - Recuperacao de conta com resposta publica generica para reduzir enumeracao de usuarios.
 - Logout com revogacao do JWT atual por `jti`.
-- Rate limit global em memoria por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP+conta e por conta.
+- Rate limit global por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP+conta e por conta.
+- Redis e opcional: sem `REDIS_URL`, os limites usam memoria local; com `REDIS_URL`, o rate limit global e os limites de login/recuperacao passam a ser distribuidos entre instancias.
 - Headers de seguranca contra clickjacking e exposicao indevida de respostas.
 - Logs de SMTP mascaram o email de destino.
 - Logs podem ser emitidos em texto simples ou JSON por `LOG_FORMAT`.
@@ -148,7 +149,7 @@ STARTUP_LOCK_STALE_SECONDS=300
 
 Descricao:
 
-- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pela Shard, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. Se a Shard entregar `postgres://` ou `?ssl=true`, a aplicacao normaliza automaticamente para `postgresql://` com `sslmode=require`.
+- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pela Shard, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. Se a Shard entregar `postgres://`, a aplicacao normaliza automaticamente para `postgresql://`. Quando o host do PostgreSQL nao for local, a API força `sslmode=require` mesmo que a URL original nao traga parametro de SSL.
 - `DB_POOL_SIZE`: quantidade de conexoes permanentes mantidas no pool quando o banco nao for SQLite.
 - `DB_MAX_OVERFLOW`: conexoes extras permitidas quando o pool estiver cheio.
 - `DB_POOL_TIMEOUT_SECONDS`: tempo maximo aguardando uma conexao livre do pool.
@@ -178,9 +179,9 @@ Descricao:
 - `RATE_LIMIT_SENSITIVE_MAX_REQUESTS`: maximo para rotas sensiveis, como auth, cadastro, admin e alteracoes.
 - `RATE_LIMIT_PUBLIC_MAX_REQUESTS`: maximo para rotas publicas, como `/` e `/health`.
 - `RATE_LIMIT_POLLING_MAX_REQUESTS`: maximo para consultas frequentes, como notificacoes.
-- `REDIS_URL`: opcional. Quando configurada, o rate limit global passa a ser compartilhado entre instancias da API. Sem Redis, o limite continua local em memoria.
+- `REDIS_URL`: opcional. Quando configurada, o rate limit global e os limites de login/recuperacao passam a ser compartilhados entre instancias da API. Sem Redis, os limites continuam locais em memoria.
 - `REDIS_RATE_LIMIT_PREFIX`: prefixo das chaves de rate limit criadas no Redis.
-- `REDIS_CONNECT_TIMEOUT_SECONDS` e `REDIS_OPERATION_TIMEOUT_SECONDS`: limites curtos para evitar que falha no Redis deixe a API lenta.
+- `REDIS_CONNECT_TIMEOUT_SECONDS` e `REDIS_OPERATION_TIMEOUT_SECONDS`: limites curtos para evitar que falha no Redis deixe a API lenta. Se o Redis ficar indisponivel, a API faz fallback temporario para memoria local.
 - `MAX_CONCURRENT_REQUESTS`: quantidade maxima de requisicoes processadas ao mesmo tempo por instancia.
 - `CONCURRENCY_WAIT_TIMEOUT_SECONDS`: tempo maximo que uma requisicao aguarda vaga antes de receber 503.
 - `MAX_REQUEST_BODY_BYTES`: tamanho maximo aceito para o corpo da requisicao. O padrao considera ate 3 imagens compactadas.
@@ -325,7 +326,7 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Rotas publicas e consultas de polling possuem limites proprios para reduzir abuso.
 - A API limita tamanho de corpo, URL e headers antes de processar a requisicao, inclusive quando o corpo chega em stream sem `Content-Length`.
 - A API possui limite de concorrencia por instancia para reduzir saturacao por rajadas de requests.
-- `REDIS_URL` pode ser configurada para rate limit distribuido entre instancias. Sem Redis, a API usa limite local em memoria.
+- `REDIS_URL` pode ser configurada para rate limit distribuido entre instancias, incluindo login e recuperacao de conta. Sem Redis, a API usa limite local em memoria, adequado para uma unica instancia.
 - Cadastro publico tambem evita confirmar diretamente se um email ja existe.
 - Listagens usam respostas resumidas para nao trafegar imagem/base64 ou descricao completa sem necessidade.
 - Notificacoes sao salvas por destinatario e retornadas apenas para o usuario autenticado, evitando IDOR.
@@ -341,6 +342,9 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho. O limite foi ajustado para aceitar fotos de celular compactadas sem permitir imagens brutas excessivas no banco SQLite.
 - Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
 - O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
+- Novas senhas exigem pelo menos 10 caracteres, letras e numeros, e rejeitam padroes previsiveis.
+- A API impede que um administrador altere o proprio papel ou remova o papel do ultimo administrador restante.
+- Conexoes PostgreSQL remotas usam `sslmode=require` por padrao, mesmo quando a URL original nao informa SSL.
 - Em 19/07/2026, as dependencias de producao do `requirements.txt` foram atualizadas e auditadas com `pip-audit`, sem vulnerabilidades conhecidas no resultado.
 - O projeto pode usar SQLite em deploy simples, mas PostgreSQL e recomendado para ambiente real por oferecer melhor concorrencia, backup, isolamento e recursos de seguranca do banco gerenciado.
 - O arquivo SQLite nao e criptografado integralmente por padrao; para dados reais, prefira PostgreSQL gerenciado com criptografia em repouso, backup e controle de acesso.

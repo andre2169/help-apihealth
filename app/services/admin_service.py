@@ -22,6 +22,31 @@ from app.services.notification_service import (
 VALID_ROLES = ["user", "technician", "admin"]
 
 
+def _admin_count(db: Session) -> int:
+    return db.query(User.id).filter(User.role == "admin").count()
+
+
+def _ensure_role_change_is_safe(
+    *,
+    db: Session,
+    user: User,
+    actor: User,
+    new_role: str,
+) -> None:
+    if user.role == new_role:
+        return
+
+    if user.id == actor.id:
+        raise TicketPermissionDenied(
+            "Admin não pode alterar o próprio papel."
+        )
+
+    if user.role == "admin" and new_role != "admin" and _admin_count(db) <= 1:
+        raise TicketPermissionDenied(
+            "Não é possível remover o papel do último administrador."
+        )
+
+
 def list_users_service(*, db: Session):
     users = db.query(User).order_by(User.created_at.desc(), User.id.desc()).all()
     return [
@@ -60,6 +85,12 @@ def change_user_role_service(
 
     user = get_user_service(db=db, user_id=user_id)
     old_role = user.role
+    _ensure_role_change_is_safe(
+        db=db,
+        user=user,
+        actor=actor,
+        new_role=role,
+    )
 
     user.role = role
     user.session_version = (user.session_version or 1) + 1

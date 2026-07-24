@@ -27,7 +27,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=10, max_length=128)
     phone: Optional[str] = Field(default=None, min_length=10, max_length=11)
     job_title: Optional[str] = Field(default=None, max_length=40)
     department: Optional[str] = Field(default=None, max_length=30)
@@ -214,7 +214,7 @@ class UserProfileUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
 
     @field_validator("new_password", mode="before")
     @classmethod
@@ -223,7 +223,7 @@ class PasswordChange(BaseModel):
 
 
 class PasswordChangeConfirm(BaseModel):
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
     @field_validator("new_password", mode="before")

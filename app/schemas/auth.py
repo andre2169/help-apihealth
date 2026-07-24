@@ -17,7 +17,7 @@ class LoginRequest(BaseModel):
 
 class AccountRecoveryRequest(BaseModel):
     email: EmailStr
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -32,7 +32,7 @@ class AccountRecoveryRequest(BaseModel):
 
 class AccountRecoveryConfirm(BaseModel):
     email: EmailStr
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
     @field_validator("email", mode="before")

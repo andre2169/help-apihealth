@@ -27,6 +27,18 @@ DANGEROUS_TEXT_RE = re.compile(
 )
 ALLOWED_SYMBOL_CHARS = {"º", "ª", "°"}
 MAX_IMAGE_BYTES = 1_200_000
+COMMON_WEAK_PASSWORDS = {
+    "1234567890",
+    "123456789",
+    "password123",
+    "password1234",
+    "senha12345",
+    "senha123456",
+    "admin12345",
+    "admin123456",
+    "qwerty12345",
+    "qwerty123456",
+}
 
 
 def _collapse_spaces(value: str) -> str:
@@ -160,14 +172,17 @@ def validate_long_text(
 
 def validate_password(value: object) -> str:
     password = str(value)
-    if len(password) < 8:
-        raise ValueError("A senha deve ter pelo menos 8 caracteres.")
+    if len(password) < 10:
+        raise ValueError("A senha deve ter pelo menos 10 caracteres.")
     if len(password) > 128:
         raise ValueError("A senha deve ter no máximo 128 caracteres.")
     if any(unicodedata.category(char).startswith("C") for char in password):
         raise ValueError("A senha contém caracteres inválidos.")
     if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", password) or not re.search(r"\d", password):
         raise ValueError("A senha deve ter letras e números.")
+    normalized = password.strip().lower()
+    if normalized in COMMON_WEAK_PASSWORDS or len(set(normalized)) <= 3:
+        raise ValueError("Escolha uma senha menos previsível.")
     return password
 
 
