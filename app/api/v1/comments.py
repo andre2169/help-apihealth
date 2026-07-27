@@ -8,7 +8,7 @@ from app.core.dependencies import get_current_user
 from app.schemas.comment import CommentCreate, CommentResponse
 from app.db.models.user import User
 
-from app.services.comment_service import create_comment_service
+from app.services.tickets.comments import create_comment_service
 from app.core.exceptions import (
     TicketNotFound,
     TicketInvalidStatus,

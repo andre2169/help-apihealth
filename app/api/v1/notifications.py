@@ -9,7 +9,7 @@ from app.schemas.notification import (
     NotificationReadAllResponse,
     NotificationResponse,
 )
-from app.services.notification_service import (
+from app.services.notifications.service import (
     list_my_notifications,
     mark_all_notifications_read,
     mark_notification_read,

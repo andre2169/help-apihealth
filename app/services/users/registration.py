@@ -4,11 +4,11 @@ from app.db.models.user import User
 from app.schemas.user import UserCreate
 from app.core.security import hash_password
 from app.core.exceptions import UserAlreadyExists
-from app.services.account_verification_service import (
+from app.services.auth.account_verification import (
     PURPOSE_EMAIL_VERIFICATION,
     create_account_verification,
 )
-from app.services.audit_service import record_audit_event
+from app.services.audit.events import record_audit_event
 
 
 def create_user_service(

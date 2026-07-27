@@ -6,8 +6,8 @@ import uvicorn
 
 from app.core.config import settings
 from app.main import app
-from app.services.bootstrap_service import create_initial_admin
-from app.services.startup_lock import startup_lock
+from app.services.system.bootstrap import create_initial_admin
+from app.services.system.startup_lock import startup_lock
 
 
 def run_migrations() -> None:

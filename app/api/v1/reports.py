@@ -8,7 +8,7 @@ from app.db.models.user import User
 from app.deps import get_db
 from app.schemas.enums import TicketImpact, TicketPriority, TicketStatus
 from app.schemas.validators import validate_short_text
-from app.services.dashboard_service import reports_overview_service
+from app.services.reports.metrics import reports_overview_service
 
 
 router = APIRouter(prefix="/reports", tags=["Reports"])

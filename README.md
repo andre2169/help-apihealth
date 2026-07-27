@@ -73,10 +73,19 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 helphealth-api/
   app/
     api/              Rotas da API
-    core/             Configuracoes, autenticacao e permissoes
+    core/             Configuracoes, autenticacao, permissoes e utilitarios centrais
     db/               Sessao do banco e modelos SQLAlchemy
+    middlewares/      Protecoes e interceptadores HTTP por responsabilidade
     schemas/          Schemas Pydantic
-    services/         Regras de negocio
+    services/         Regras de negocio separadas por dominio
+      audit/          Registro de eventos de auditoria
+      auth/           Login, tokens, rate limit de conta e codigos de verificacao
+      messaging/      Envio de email por SMTP
+      notifications/  Notificacoes internas para tecnicos e administradores
+      reports/        Dashboard, metricas e relatorios
+      system/         Bootstrap e controle de inicializacao
+      tickets/        Chamados, comentarios, timeline e permissoes de visualizacao
+      users/          Cadastro, perfil e administracao de usuarios
   alembic/            Migracoes do banco
   main.py             Entrada da aplicacao
   requirements.txt    Dependencias Python
@@ -434,6 +443,23 @@ Em uma VPS ou outra plataforma, mantenha `TRUSTED_PROXY_HOPS=0` se a API receber
 ## Logs e privacidade
 
 Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. Por seguranca, a API ignora `X-Forwarded-For`, `X-Real-IP` e `CF-Connecting-IP` por padrao. Configure `TRUSTED_PROXY_HOPS=1` apenas depois de confirmar o comportamento do proxy da hospedagem.
+
+Os logs HTTP tambem usam nomes de acao para facilitar a leitura no terminal, por exemplo `ticket.create`, `auth.login`, `ticket.resolve`, `notification.list` e `report.overview`. Requisicoes automaticas de `/health` e preflight `OPTIONS` bem-sucedidas ficam em `DEBUG`, reduzindo ruido quando `LOG_LEVEL=INFO`; erros continuam aparecendo em `WARNING` ou `ERROR`.
+
+## Padrao de status HTTP
+
+A API segue o padrao REST principal:
+
+- `200 OK`: consultas, login, logout, atualizacoes e acoes que retornam corpo de resposta.
+- `201 Created`: criacao de usuario, chamado e comentario.
+- `204 No Content`: exclusoes feitas por administrador, sem corpo de resposta.
+- `400 Bad Request`: regra de negocio invalida, como codigo incorreto ou status incompatível.
+- `401 Unauthorized`: usuario nao autenticado ou credenciais invalidas.
+- `403 Forbidden`: usuario autenticado sem permissao para a acao.
+- `404 Not Found`: recurso inexistente ou rota administrativa desabilitada.
+- `413/414/415/422`: limites de corpo/URL/tipo de conteudo e validacao de campos.
+- `429 Too Many Requests`: limite de requisicoes atingido.
+- `503 Service Unavailable`: limite de concorrencia da instancia atingido.
 
 ## Admin inicial
 

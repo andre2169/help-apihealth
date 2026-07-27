@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.exceptions import TicketPermissionDenied
 from app.core.request_context import get_client_ip, mask_email
 
-from app.services.admin_service import (
+from app.services.users.admin import (
     list_users_service,
     get_user_service,
     change_user_role_service,

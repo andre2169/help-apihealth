@@ -12,8 +12,8 @@ from app.core.exceptions import (
     InvalidUserRole,
     TicketPermissionDenied,
 )
-from app.services.audit_service import record_audit_event
-from app.services.notification_service import (
+from app.services.audit.events import record_audit_event
+from app.services.notifications.service import (
     delete_notifications_for_tickets,
     remove_user_from_notifications,
 )

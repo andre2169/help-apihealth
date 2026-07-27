@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models.account_verification import AccountVerification
 from app.db.models.user import User
-from app.services.email_service import send_email
+from app.services.messaging.email import send_email
 
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,7 @@ from app.core.auth import decode_access_token
 from app.core.config import settings
 from app.deps import get_db
 from app.db.models.user import User
-from app.services.token_service import is_token_revoked
+from app.services.auth.tokens import is_token_revoked
 
 security = HTTPBearer(auto_error=False)
 

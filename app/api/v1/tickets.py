@@ -13,9 +13,9 @@ from app.db.models.user import User
 from app.schemas.ticket import TicketCreate, TicketResponse, TicketListResponse
 from app.schemas.timeline import TimelineItem
 
-from app.services import ticket_service
-from app.services.timeline_service import get_ticket_timeline
-from app.services.ticket_access_service import can_view_ticket_timeline
+from app.services.tickets import service as ticket_service
+from app.services.tickets.timeline import get_ticket_timeline
+from app.services.tickets.access import can_view_ticket_timeline
 from app.schemas.enums import (
     SortDirection,
     TicketImpact,
@@ -53,7 +53,12 @@ def _clean_optional_filter(value: str | None, field_name: str, max_length: int) 
         ) from exc
 
 
-@router.post("/", response_model=TicketResponse, response_model_exclude_none=True)
+@router.post(
+    "/",
+    response_model=TicketResponse,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
 def create_ticket(
     ticket_in: TicketCreate,
     db: Session = Depends(get_db),

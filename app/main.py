@@ -7,10 +7,12 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.core.logging_config import setup_logging
-from app.core.middleware import (
+from app.middlewares import (
+    ConcurrencyLimitMiddleware,
     ExceptionMiddleware,
     OriginCheckMiddleware,
     RateLimitMiddleware,
+    RequestGuardMiddleware,
     SecurityHeadersMiddleware,
 )
 from app.core.config import settings
@@ -68,6 +70,8 @@ def require_docs_access(credentials: HTTPBasicCredentials | None = Depends(docs_
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestGuardMiddleware)
+app.add_middleware(ConcurrencyLimitMiddleware)
 app.add_middleware(ExceptionMiddleware)
 
 # CORS fica por último para envolver inclusive respostas de erro geradas por middleware.

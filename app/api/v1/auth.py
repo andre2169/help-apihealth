@@ -23,10 +23,10 @@ from app.core.auth import decode_access_token
 from app.core.request_context import get_client_ip, mask_email
 from app.core.security import hash_password, verify_password
 
-from app.services.auth_service import login_service
+from app.services.auth.login import login_service
 from app.core.exceptions import InvalidCredentials
 from app.core.dependencies import extract_auth_token, get_current_user, security
-from app.services.account_verification_service import (
+from app.services.auth.account_verification import (
     PURPOSE_EMAIL_CHANGE,
     PURPOSE_EMAIL_VERIFICATION,
     PURPOSE_PASSWORD_CHANGE,
@@ -35,10 +35,10 @@ from app.services.account_verification_service import (
     consume_account_verification,
     create_account_verification,
 )
-from app.services.token_service import revoke_token
-from app.services.audit_service import record_audit_event
+from app.services.auth.tokens import revoke_token
+from app.services.audit.events import record_audit_event
 
-from app.services.rate_limit_service import (
+from app.services.auth.rate_limits import (
     check_login_rate_limit,
     consume_action_rate_limit,
     register_failed_login,
