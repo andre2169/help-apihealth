@@ -174,17 +174,17 @@ def login(
 ):
     ip = get_client_ip(request)
 
-    if not check_login_rate_limit(ip, data.email):
+    if not check_login_rate_limit(ip, data.email, include_account=False):
 
         logger.warning(
-            "Login bloqueado por rate limit | ip=%s | email=%s",
+            "Login bloqueado por rate limit de IP | ip=%s | email=%s",
             ip,
             mask_email(data.email),
         )
 
         raise HTTPException(
             status_code=429,
-            detail="Muitas tentativas de login. Aguarde alguns minutos.",
+            detail="Muitas tentativas neste acesso. Aguarde alguns minutos.",
         )
 
     try:
@@ -222,6 +222,16 @@ def login(
                 ip,
                 data.email,
             )
+            if not check_login_rate_limit(ip, data.email, include_account=True):
+                logger.warning(
+                    "Login bloqueado apos falhas invalidas | ip=%s | email=%s",
+                    ip,
+                    mask_email(data.email),
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Muitas tentativas de login. Aguarde alguns minutos.",
+                ) from e
 
         _http_error(
             e,

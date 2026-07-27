@@ -111,8 +111,11 @@ def _build_account_key(email: str) -> str:
     return f"account:{_normalize_email(email)}"
 
 
-def _keys_for(ip: str, email: str) -> tuple[str, str]:
-    return _build_ip_key(ip, email), _build_account_key(email)
+def _keys_for(ip: str, email: str, *, include_account: bool = True) -> tuple[str, ...]:
+    keys = [_build_ip_key(ip, email)]
+    if include_account:
+        keys.append(_build_account_key(email))
+    return tuple(keys)
 
 
 def _is_blocked(login_data: dict[str, Any] | None, now: datetime) -> bool:
@@ -147,23 +150,31 @@ def _cleanup_failed_logins(now: datetime) -> None:
         failed_logins.pop(key, None)
 
 
-def check_login_rate_limit(ip: str, email: str) -> bool:
+def check_login_rate_limit(ip: str, email: str, *, include_account: bool = False) -> bool:
     """
     Verifica se o login está permitido.
+
+    O bloqueio por IP pode ser checado antes do bcrypt para poupar recursos.
+    O bloqueio por conta fica para depois da validação da senha, permitindo
+    que o dono da conta consiga entrar com a senha correta e limpar o bloqueio.
 
     Retorna:
         True  -> pode tentar login
         False -> está bloqueado
     """
 
-    redis_result = _check_login_rate_limit_redis(ip, email)
+    redis_result = _check_login_rate_limit_redis(
+        ip,
+        email,
+        include_account=include_account,
+    )
     if redis_result is not None:
         return redis_result
 
     now = _utc_now()
     _cleanup_failed_logins(now)
 
-    for key in _keys_for(ip, email):
+    for key in _keys_for(ip, email, include_account=include_account):
         login_data = failed_logins.get(key)
         if _is_blocked(login_data, now):
             return False
@@ -213,9 +224,14 @@ def clear_failed_login(ip: str, email: str):
         failed_logins.pop(key, None)
 
 
-def _check_login_rate_limit_redis(ip: str, email: str) -> bool | None:
+def _check_login_rate_limit_redis(
+    ip: str,
+    email: str,
+    *,
+    include_account: bool = False,
+) -> bool | None:
     def operation(client):
-        for key in _keys_for(ip, email):
+        for key in _keys_for(ip, email, include_account=include_account):
             if client.exists(_redis_key("login", "block", key)):
                 return False
         return True

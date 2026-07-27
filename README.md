@@ -44,7 +44,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Troca de senha e email protegida por codigo temporario enviado por email.
 - Recuperacao de conta com resposta publica generica para reduzir enumeracao de usuarios.
 - Logout com revogacao do JWT atual por `jti`.
-- Rate limit global por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP+conta e por conta.
+- Rate limit global por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP + conta. A conta tambem acumula falhas para reduzir brute force distribuido, mas uma senha correta em outro acesso pode limpar o bloqueio da propria conta.
 - Redis e opcional: sem `REDIS_URL`, os limites usam memoria local; com `REDIS_URL`, o rate limit global e os limites de login/recuperacao passam a ser distribuidos entre instancias.
 - Headers de seguranca contra clickjacking e exposicao indevida de respostas.
 - Logs de SMTP mascaram o email de destino.
