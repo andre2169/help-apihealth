@@ -66,6 +66,7 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Timeline de eventos e comentarios.
 - Notificacoes persistentes por usuario para tecnicos e administradores.
 - Relatorios por periodo, status, prioridade, setor, categoria, equipamento, impacto, SLA, idade da fila, volume diario, solicitantes recorrentes e reaberturas.
+- Exportacao de relatorio gerencial em PDF real pela API, com layout A4 horizontal, blocos compactos, resumo Top N + "Outros" e download direto pelo navegador.
 
 ## Estrutura principal
 
@@ -88,7 +89,7 @@ helphealth-api/
       users/          Cadastro, perfil e administracao de usuarios
   alembic/            Migracoes do banco
   main.py             Entrada da aplicacao
-  requirements.txt    Dependencias Python
+  requirements.txt    Dependencias Python, incluindo ReportLab para gerar PDF
   requirements-postgres.txt Atalho compativel para instalacao das dependencias
   tools/             Utilitarios locais, incluindo migracao SQLite -> PostgreSQL
   .env.example        Exemplo de variaveis de ambiente

@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.permissions import require_technician
@@ -9,6 +9,7 @@ from app.deps import get_db
 from app.schemas.enums import TicketImpact, TicketPriority, TicketStatus
 from app.schemas.validators import validate_short_text
 from app.services.reports.metrics import reports_overview_service
+from app.services.reports.pdf import build_reports_overview_pdf, report_pdf_filename
 
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -84,4 +85,42 @@ def reports_overview(
         category=_clean_optional_filter(category, "Categoria", 40),
         sector=_clean_optional_filter(sector, "Setor", 30),
         operational_impact=operational_impact.value if operational_impact else None,
+    )
+
+
+@router.get("/overview.pdf")
+def reports_overview_pdf(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    status: TicketStatus | None = None,
+    priority: TicketPriority | None = None,
+    category: str | None = Query(None, min_length=2, max_length=40),
+    sector: str | None = Query(None, min_length=2, max_length=30),
+    operational_impact: TicketImpact | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_technician),
+):
+    _validate_report_period(start_date, end_date)
+
+    data = reports_overview_service(
+        db=db,
+        current_user=current_user,
+        start_date=start_date,
+        end_date=end_date,
+        status=status.value if status else None,
+        priority=priority.value if priority else None,
+        category=_clean_optional_filter(category, "Categoria", 40),
+        sector=_clean_optional_filter(sector, "Setor", 30),
+        operational_impact=operational_impact.value if operational_impact else None,
+    )
+    pdf_bytes = build_reports_overview_pdf(data)
+    filename = report_pdf_filename(data.get("filters"))
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )
