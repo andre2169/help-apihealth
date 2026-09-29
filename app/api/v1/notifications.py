@@ -16,7 +16,11 @@ from app.services.notifications.service import (
 )
 
 
-router = APIRouter(prefix="/notifications", tags=["Notifications"])
+router = APIRouter(
+    prefix="/notifications",
+    tags=["Notifications"],
+    dependencies=[Depends(require_user)],
+)
 
 
 @router.get("/", response_model=NotificationListResponse)

@@ -1,13 +1,20 @@
 import logging
+import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
-from app.schemas.auth import AccountRecoveryConfirm, AccountRecoveryRequest, LoginRequest, LoginResponse
+from app.schemas.auth import (
+    AccountRecoveryConfirm,
+    AccountRecoveryRequest,
+    LoginMFAConfirm,
+    LoginRequest,
+    LoginResponse,
+)
 from app.schemas.user import (
     EmailChangeConfirm,
     EmailChangeRequest,
@@ -18,10 +25,13 @@ from app.schemas.user import (
     UserResponse,
 )
 from app.db.models.user import User
+from app.db.models.account_verification import AccountVerification
+from app.core import security_policy as policy
 from app.core.config import settings
-from app.core.auth import decode_access_token
+from app.core.auth import create_access_token, decode_access_token
 from app.core.request_context import get_client_ip, mask_email
 from app.core.security import hash_password, verify_password
+from app.middlewares.csrf import _set_csrf_cookie, clear_csrf_cookie
 
 from app.services.auth.login import login_service
 from app.core.exceptions import InvalidCredentials
@@ -29,6 +39,7 @@ from app.core.dependencies import extract_auth_token, get_current_user, security
 from app.services.auth.account_verification import (
     PURPOSE_EMAIL_CHANGE,
     PURPOSE_EMAIL_VERIFICATION,
+    PURPOSE_LOGIN_MFA,
     PURPOSE_PASSWORD_CHANGE,
     PURPOSE_PASSWORD_RECOVERY,
     build_password_change_target,
@@ -41,6 +52,7 @@ from app.services.audit.events import record_audit_event
 from app.services.auth.rate_limits import (
     check_login_rate_limit,
     consume_action_rate_limit,
+    get_login_retry_after,
     register_failed_login,
     clear_failed_login,
 ) 
@@ -75,26 +87,35 @@ def _normalize_email(email: str) -> str:
 
 def _set_auth_cookie(response: Response, token: str) -> None:
     response.set_cookie(
-        key=settings.AUTH_COOKIE_NAME,
+        key=policy.AUTH_COOKIE_NAME,
         value=token,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        max_age=policy.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         httponly=True,
         secure=settings.AUTH_COOKIE_SECURE,
         samesite=settings.AUTH_COOKIE_SAMESITE,
         domain=settings.AUTH_COOKIE_DOMAIN,
         path="/",
+    )
+    _set_csrf_cookie(response)
+
+
+def _create_session_token(user: User) -> str:
+    return create_access_token(
+        data={"sub": str(user.id), "session_version": user.session_version or 1},
+        expires_delta=timedelta(minutes=policy.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 
 
 def _clear_auth_cookie(response: Response) -> None:
     response.delete_cookie(
-        key=settings.AUTH_COOKIE_NAME,
+        key=policy.AUTH_COOKIE_NAME,
         domain=settings.AUTH_COOKIE_DOMAIN,
         path="/",
         secure=settings.AUTH_COOKIE_SECURE,
         samesite=settings.AUTH_COOKIE_SAMESITE,
         httponly=True,
     )
+    clear_csrf_cookie(response)
 
 
 def _bump_session_version(user: User) -> None:
@@ -102,23 +123,23 @@ def _bump_session_version(user: User) -> None:
 
 
 def _wait_account_recovery_floor(started_at: float) -> None:
-    remaining = settings.ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS - (time.monotonic() - started_at)
+    remaining = policy.ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS - (time.monotonic() - started_at)
     if remaining > 0:
         time.sleep(remaining)
 
 
 def _check_account_recovery_rate_limit(*, ip: str, email: str) -> None:
-    window = settings.ACCOUNT_RECOVERY_WINDOW_SECONDS
+    window = policy.ACCOUNT_RECOVERY_WINDOW_SECONDS
     email_allowed = consume_action_rate_limit(
         action="password_recovery_email",
         key=email,
-        max_requests=settings.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL,
+        max_requests=policy.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL,
         window_seconds=window,
     )
     ip_allowed = consume_action_rate_limit(
         action="password_recovery_ip",
         key=ip,
-        max_requests=settings.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP,
+        max_requests=policy.ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP,
         window_seconds=window,
     )
     if not email_allowed or not ip_allowed:
@@ -132,8 +153,8 @@ def _check_account_recovery_rate_limit(*, ip: str, email: str) -> None:
 def _verification_response(email_sent: bool):
     base_response = {
         "status": "verification_required",
-        "expires_in_minutes": settings.EMAIL_CODE_EXPIRE_MINUTES,
-        "resend_after_seconds": settings.VERIFICATION_RESEND_COOLDOWN_SECONDS,
+        "expires_in_minutes": policy.EMAIL_CODE_EXPIRE_MINUTES,
+        "resend_after_seconds": policy.VERIFICATION_RESEND_COOLDOWN_SECONDS,
     }
 
     if email_sent:
@@ -154,8 +175,8 @@ def _account_recovery_response(email_sent: bool = True):
     return {
         "status": "verification_required",
         "delivery": "email" if email_sent else "log",
-        "expires_in_minutes": settings.EMAIL_CODE_EXPIRE_MINUTES,
-        "resend_after_seconds": settings.VERIFICATION_RESEND_COOLDOWN_SECONDS,
+        "expires_in_minutes": policy.EMAIL_CODE_EXPIRE_MINUTES,
+        "resend_after_seconds": policy.VERIFICATION_RESEND_COOLDOWN_SECONDS,
         "message": (
             "Se houver uma conta com esse email, enviaremos um código de recuperação."
         ),
@@ -165,6 +186,7 @@ def _account_recovery_response(email_sent: bool = True):
 @router.post(
     "/login",
     response_model=LoginResponse,
+    response_model_exclude_none=True,
 )
 def login(
     request: Request,
@@ -174,17 +196,21 @@ def login(
 ):
     ip = get_client_ip(request)
 
-    if not check_login_rate_limit(ip, data.email, include_account=False):
-
+    if not check_login_rate_limit(ip, data.email, include_account=True):
+        # Nao executa bcrypt durante o bloqueio. Isso impede que um atacante
+        # use milhares de tentativas para consumir CPU e mantem a janela de
+        # bloqueio efetiva mesmo quando a senha informada estiver correta.
+        retry_after = max(1, get_login_retry_after(ip, data.email))
         logger.warning(
-            "Login bloqueado por rate limit de IP | ip=%s | email=%s",
+            "Login bloqueado por rate limit | ip=%s | email=%s | retry_after=%ss",
             ip,
             mask_email(data.email),
+            retry_after,
         )
-
         raise HTTPException(
             status_code=429,
-            detail="Muitas tentativas neste acesso. Aguarde alguns minutos.",
+            detail="Muitas tentativas de login. Aguarde o tempo informado antes de tentar novamente.",
+            headers={"Retry-After": str(retry_after)},
         )
 
     try:
@@ -194,16 +220,74 @@ def login(
             mask_email(data.email),
         )
 
-        token_response = login_service(
+        user = login_service(
             db=db,
             email=data.email,
             password=data.password,
         )
-        _set_auth_cookie(response, token_response["access_token"])
 
         # Login deu certo
         # Zera histórico de falhas
         clear_failed_login(ip, data.email)
+
+        if user.role in policy.LOGIN_MFA_ROLES:
+            challenge_id = secrets.token_hex(32)
+            email_sent = create_account_verification(
+                db=db,
+                user=user,
+                purpose=PURPOSE_LOGIN_MFA,
+                recipient_email=user.email,
+                target_value=challenge_id,
+            )
+            local_mfa_logging = settings.local_login_mfa_code_logging
+            if (
+                not email_sent
+                and not policy.ALLOW_LOG_VERIFICATION_CODES
+                and not local_mfa_logging
+            ):
+                (
+                    db.query(AccountVerification)
+                    .filter(
+                        AccountVerification.user_id == user.id,
+                        AccountVerification.purpose == PURPOSE_LOGIN_MFA,
+                        AccountVerification.target_value == challenge_id,
+                        AccountVerification.used_at.is_(None),
+                    )
+                    .update(
+                        {AccountVerification.used_at: datetime.now(timezone.utc)},
+                        synchronize_session=False,
+                    )
+                )
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Não foi possível concluir a autenticação. Tente novamente mais tarde.",
+                )
+
+            _clear_auth_cookie(response)
+            record_audit_event(
+                db,
+                actor_id=user.id,
+                action="auth.login_mfa_challenge",
+                target_type="user",
+                target_id=user.id,
+                ip_address=ip,
+            )
+            db.commit()
+            return {
+                "status": "verification_required",
+                "token_type": None,
+                "challenge_id": challenge_id,
+                "delivery": "email" if email_sent else "log",
+                "expires_in_minutes": policy.EMAIL_CODE_EXPIRE_MINUTES,
+                "message": (
+                    "Enviamos um código para confirmar seu acesso."
+                    if email_sent
+                    else "Use o código exibido nos logs locais da API."
+                ),
+            }
+
+        _set_auth_cookie(response, _create_session_token(user))
 
         logger.info(
             "Login realizado com sucesso | ip=%s | email=%s",
@@ -223,20 +307,91 @@ def login(
                 data.email,
             )
             if not check_login_rate_limit(ip, data.email, include_account=True):
+                retry_after = max(1, get_login_retry_after(ip, data.email))
                 logger.warning(
-                    "Login bloqueado apos falhas invalidas | ip=%s | email=%s",
+                    "Login bloqueado apos falhas invalidas | ip=%s | email=%s | retry_after=%ss",
                     ip,
                     mask_email(data.email),
+                    retry_after,
                 )
                 raise HTTPException(
                     status_code=429,
-                    detail="Muitas tentativas de login. Aguarde alguns minutos.",
+                    detail="Muitas tentativas de login. Aguarde o tempo informado.",
+                    headers={"Retry-After": str(retry_after)},
                 ) from e
 
         _http_error(
             e,
             email=data.email,
         )
+
+
+@router.post(
+    "/login/verify",
+    response_model=LoginResponse,
+    response_model_exclude_none=True,
+)
+def verify_login_mfa(
+    request: Request,
+    response: Response,
+    data: LoginMFAConfirm,
+    db: Session = Depends(get_db),
+):
+    ip = get_client_ip(request)
+    if not consume_action_rate_limit(
+        action="login_mfa_verify",
+        key=data.challenge_id,
+        max_requests=policy.LOGIN_MFA_VERIFY_MAX_REQUESTS,
+        window_seconds=policy.LOGIN_MFA_VERIFY_WINDOW_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas tentativas de confirmação. Solicite um novo código mais tarde.",
+            headers={"Retry-After": str(policy.LOGIN_MFA_VERIFY_WINDOW_SECONDS)},
+        )
+
+    pending = (
+        db.query(AccountVerification)
+        .filter(
+            AccountVerification.purpose == PURPOSE_LOGIN_MFA,
+            AccountVerification.target_value == data.challenge_id,
+            AccountVerification.used_at.is_(None),
+        )
+        .order_by(AccountVerification.created_at.desc())
+        .first()
+    )
+    user = db.get(User, pending.user_id) if pending else None
+    if (
+        not user
+        or not user.is_active
+        or user.role not in policy.LOGIN_MFA_ROLES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Código inválido ou expirado.",
+        )
+
+    consume_account_verification(
+        db=db,
+        user=user,
+        purpose=PURPOSE_LOGIN_MFA,
+        target_value=data.challenge_id,
+        code=data.code,
+    )
+    db.commit()
+
+    record_audit_event(
+        db,
+        actor_id=user.id,
+        action="auth.login_mfa_verified",
+        target_type="user",
+        target_id=user.id,
+        ip_address=ip,
+    )
+    db.commit()
+    _set_auth_cookie(response, _create_session_token(user))
+    logger.info("Segundo fator de login confirmado | ip=%s | user_id=%s", ip, user.id)
+    return {"status": "ok", "token_type": "cookie"}
 
 
 @router.post("/password/recovery/request")
@@ -343,6 +498,23 @@ def read_me(
     )
 
     return current_user
+
+
+@router.get("/csrf")
+def read_csrf_token(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
+    """Returns the browser session's CSRF token without exposing the session JWT."""
+    del current_user
+    csrf_token = request.cookies.get(policy.CSRF_COOKIE_NAME)
+    if not csrf_token:
+        csrf_token = _set_csrf_cookie(response)
+    else:
+        response.headers[policy.CSRF_HEADER_NAME] = csrf_token
+
+    return {"csrf_token": csrf_token}
 
 
 @router.post("/logout")

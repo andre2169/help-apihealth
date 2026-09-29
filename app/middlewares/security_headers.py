@@ -1,5 +1,6 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core import security_policy as policy
 from app.core.config import settings
 
 
@@ -9,7 +10,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         docs_path = request.url.path in {"/docs", "/redoc", "/openapi.json"}
 
         response.headers.setdefault("X-Frame-Options", "DENY")
-        if docs_path and settings.ENABLE_API_DOCS:
+        if docs_path and policy.ENABLE_API_DOCS:
             response.headers.setdefault(
                 "Content-Security-Policy",
                 "default-src 'self' https: 'unsafe-inline'; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'none'",
@@ -24,7 +25,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        if settings.AUTH_COOKIE_SECURE:
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("X-Download-Options", "noopen")
         response.headers.setdefault(
             "Permissions-Policy",
             "camera=(), microphone=(), geolocation=(), payment=()",

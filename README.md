@@ -1,5 +1,7 @@
 ﻿# HelpWeb Health API
 
+Estado sincronizado com a fonte ativa em 29/09/2026. SQLite e usado localmente; PostgreSQL e usado na hospedagem. O arquivo `.env` real nunca deve ser versionado.
+
 Backend do **HelpWeb Health**, uma API REST desenvolvida com FastAPI para gerenciamento de chamados de TI em instituicoes de saude publica, como hospitais, clinicas, laboratorios, UPAs e setores administrativos ligados ao atendimento.
 
 O sistema foi pensado para melhorar a comunicacao entre funcionarios e equipe de tecnologia, especialmente em ambientes onde falhas de infraestrutura podem impactar o atendimento: computadores, impressoras, rede Wi-Fi, sistemas internos, leitores de codigo de barras, coletores, telefonia e outros equipamentos.
@@ -23,17 +25,17 @@ A API centraliza o ciclo de vida dos chamados:
 - controle de perfis de acesso;
 - indicadores para dashboard e relatorios filtrados.
 
-Essa organizacao ajuda a reduzir perda de informacao, ligaÃ§Ãµes informais sem registro e dificuldade de priorizacao em setores sensiveis da saude publica.
+Essa organizacao ajuda a reduzir perda de informacao, comunicacoes informais sem registro e dificuldade de priorizacao em setores sensiveis da saude publica.
 
 ## Perfis de usuario
 
 O sistema trabalha com tres perfis:
 
 - `user`: funcionario comum. Pode abrir chamados, acompanhar os proprios chamados, comentar, fechar ou reabrir quando permitido.
-- `technician`: tecnico de TI. Pode visualizar chamados operacionais, assumir atendimentos, resolver chamados e acessar indicadores.
+- `technician`: tecnico de TI. Pode visualizar chamados atribuidos a ele e chamados abertos/reabertos sem tecnico na fila compartilhada, assumir atendimentos, resolver chamados e consultar indicadores pessoais.
 - `admin`: administrador. Pode gerenciar usuarios, visualizar indicadores e executar acoes administrativas.
 
-Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, evitando que usuarios comuns acessem dados operacionais que nao fazem parte do fluxo deles.
+Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`. O administrador recebe a visao global; o tecnico recebe somente metricas dos chamados atribuidos a ele. A fila compartilhada aparece separadamente para operacao e nao contamina os indicadores pessoais. O escopo e aplicado na API, inclusive em detalhes, timeline, listagem e PDF, evitando que o frontend seja a unica barreira.
 
 ## Principais recursos
 
@@ -41,19 +43,23 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`, 
 - Regras sensiveis centralizadas no backend: permissao, SLA, mudanca de status, filtros, limites de upload, verificacao de email, rate limit e calculos de relatorio.
 - Autenticacao JWT com PyJWT.
 - Criptografia de senha com Passlib/Bcrypt.
+- Sessao entregue somente em cookie HttpOnly, com expiração, `jti`, `iss`, `aud`, `nbf`, versão de sessão e revogação no logout.
+- Proteção CSRF por cookie de duplo envio para mutações feitas com a sessão do navegador.
 - Troca de senha e email protegida por codigo temporario enviado por email.
 - Recuperacao de conta com resposta publica generica para reduzir enumeracao de usuarios.
 - Logout com revogacao do JWT atual por `jti`.
-- Rate limit global por IP + usuario/token, alem do bloqueio especifico de falhas no login por IP + conta. A conta tambem acumula falhas para reduzir brute force distribuido, mas uma senha correta em outro acesso pode limpar o bloqueio da propria conta.
+- Rate limit global por IP + usuario/token, alem do bloqueio progressivo de falhas no contexto IP + email. Assim, um erro de uma conta nao bloqueia outros usuarios da mesma rede. A cada cinco falhas, o bloqueio segue 5s, 10s, 15s, 20s, 1min, 5min, 30min, 2h e chega a 6h nas faixas mais altas. Durante o bloqueio, qualquer tentativa recebe 429 sem executar bcrypt; outro contexto de login continua podendo autenticar.
 - Redis e opcional: sem `REDIS_URL`, os limites usam memoria local; com `REDIS_URL`, o rate limit global e os limites de login/recuperacao passam a ser distribuidos entre instancias.
 - Headers de seguranca contra clickjacking e exposicao indevida de respostas.
 - Logs de SMTP mascaram o email de destino.
-- Logs podem ser emitidos em texto simples ou JSON por `LOG_FORMAT`.
+- Logs sao emitidos em formato textual legivel, definido na politica versionada.
 - Tentativas de codigo invalido/expirado ficam registradas para auditoria sem salvar o codigo digitado.
 - Headers de proxy so sao usados para identificar IP quando `TRUSTED_PROXY_HOPS` e configurado explicitamente. Quando habilitado, a API prefere `CF-Connecting-IP`, depois `X-Real-IP` e por fim `X-Forwarded-For`.
+- CORS aceita somente as origens declaradas em `ALLOWED_ORIGINS`; `*` e rejeitado. Em modo seguro, origens externas precisam usar HTTPS.
+- PostgreSQL remoto força `sslmode=require` quando a URL tenta omitir ou desativar TLS.
 - Swagger/OpenAPI desligado por padrao em producao e com protecao opcional por usuario/senha quando habilitado.
 - Health check publico simples, sem expor diagnostico do banco por padrao.
-- Controle de permissao por perfil.
+- Controle de permissao por perfil, com escopo de chamados aplicado no backend para impedir IDOR entre tecnicos.
 - SQLAlchemy ORM para facilitar migracao futura de banco.
 - Alembic para versionamento do schema.
 - SQLite para desenvolvimento, testes e deploy simples em instancia unica.
@@ -92,6 +98,7 @@ helphealth-api/
   requirements.txt    Dependencias Python, incluindo ReportLab para gerar PDF
   requirements-postgres.txt Atalho compativel para instalacao das dependencias
   tools/             Utilitarios locais, incluindo migracao SQLite -> PostgreSQL
+  tests/             Testes de autenticacao, autorizacao, CSRF, CORS, headers e banco
   .env.example        Exemplo de variaveis de ambiente
 ```
 
@@ -103,129 +110,80 @@ Crie um arquivo `.env` na raiz da API usando `.env.example` como base:
 DATABASE_URL=sqlite:///./helphealth.db
 # Para PostgreSQL na hospedagem:
 # DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
-DB_POOL_SIZE=5
-DB_MAX_OVERFLOW=10
-DB_POOL_TIMEOUT_SECONDS=30
-DB_POOL_RECYCLE_SECONDS=1800
 SECRET_KEY=coloque_uma_chave_aleatoria_real_com_32_ou_mais_caracteres
-AUTH_COOKIE_NAME=helpwebhealth_session
 AUTH_COOKIE_SECURE=false
 AUTH_COOKIE_SAMESITE=lax
 AUTH_COOKIE_DOMAIN=
-ADMIN_EMAIL=admin.exemplo@helpwebhealth.local
+ADMIN_EMAIL=admin@example.invalid
 ADMIN_PASSWORD=troque_por_uma_senha_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-ENABLE_API_DOCS=false
-ENABLE_DB_HEALTH_ENDPOINT=false
-ENABLE_NETWORK_DEBUG_ENDPOINT=false
-API_DOCS_USERNAME=admin
-API_DOCS_PASSWORD=
-LOG_LEVEL=INFO
-LOG_FORMAT=text
-ALLOW_LOG_VERIFICATION_CODES=false
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=suporte.helpwebhealth@gmail.com
-SMTP_PASSWORD=senha_de_app_do_gmail_sem_espacos
-SMTP_USE_TLS=true
-SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=30
-MAIL_FROM=suporte.helpwebhealth@gmail.com
-MAIL_FROM_NAME=HelpWeb Health
-REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
-EMAIL_CODE_EXPIRE_MINUTES=15
-VERIFICATION_RESEND_COOLDOWN_SECONDS=300
-RATE_LIMIT_WINDOW_SECONDS=60
-RATE_LIMIT_MAX_REQUESTS=240
-RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
-RATE_LIMIT_PUBLIC_MAX_REQUESTS=120
-RATE_LIMIT_POLLING_MAX_REQUESTS=80
+SMTP_USERNAME=SEU_EMAIL@gmail.com
+SMTP_PASSWORD=
 REDIS_URL=
-REDIS_RATE_LIMIT_PREFIX=helpwebhealth:rate
-REDIS_CONNECT_TIMEOUT_SECONDS=1.0
-REDIS_OPERATION_TIMEOUT_SECONDS=1.0
-MAX_CONCURRENT_REQUESTS=80
-CONCURRENCY_WAIT_TIMEOUT_SECONDS=0.25
-MAX_REQUEST_BODY_BYTES=6000000
-MAX_REQUEST_URL_BYTES=2048
-MAX_REQUEST_HEADER_BYTES=32000
-MAX_REQUEST_HEADER_VALUE_BYTES=8000
 TRUSTED_PROXY_HOPS=0
-RUN_MIGRATIONS_ON_STARTUP=true
 STARTUP_LOCK_PATH=
-STARTUP_LOCK_TIMEOUT_SECONDS=120
-STARTUP_LOCK_STALE_SECONDS=300
 ```
 
 Descricao:
 
 - `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pela Shard, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. Se a Shard entregar `postgres://`, a aplicacao normaliza automaticamente para `postgresql://`. Quando o host do PostgreSQL nao for local, a API força `sslmode=require` mesmo que a URL original nao traga parametro de SSL.
-- `DB_POOL_SIZE`: quantidade de conexoes permanentes mantidas no pool quando o banco nao for SQLite.
-- `DB_MAX_OVERFLOW`: conexoes extras permitidas quando o pool estiver cheio.
-- `DB_POOL_TIMEOUT_SECONDS`: tempo maximo aguardando uma conexao livre do pool.
-- `DB_POOL_RECYCLE_SECONDS`: tempo para reciclar conexoes antigas e evitar conexao morta em banco gerenciado.
 - `SECRET_KEY`: chave usada para assinar tokens JWT. A API recusa iniciar com chave de exemplo ou menor que 32 caracteres.
-- `AUTH_COOKIE_NAME`: nome do cookie HttpOnly usado para sessao.
 - `AUTH_COOKIE_SECURE`: use `false` somente em teste local HTTP. Em producao HTTPS, use `true`.
 - `AUTH_COOKIE_SAMESITE`: use `lax` em teste local. Se frontend e API ficarem em subdominios diferentes na Shard, use `none` junto com `AUTH_COOKIE_SECURE=true`.
 - `AUTH_COOKIE_DOMAIN`: normalmente fica vazio. Configure dominio compartilhado apenas se souber exatamente o dominio-base aceito pelo navegador.
+- Os nomes dos cookies, algoritmo JWT, expiracao da sessao e header CSRF ficam fixos em `app/core/security_policy.py`.
+- `GET /api/v1/auth/csrf`: rota autenticada que devolve somente o token CSRF da sessao para o frontend cross-origin. Ela nao devolve o JWT nem dados sensiveis.
 - `ADMIN_EMAIL`: e-mail inicial do administrador criado automaticamente.
 - `ADMIN_PASSWORD`: senha inicial do administrador. A API recusa iniciar com senha de exemplo ou menor que 12 caracteres.
 - `ALLOWED_ORIGINS`: dominios autorizados a chamar a API pelo navegador. Use a URL exata, sem barra final, e nunca use `*` em producao.
-- `ENABLE_API_DOCS`: libera `/docs`, `/redoc` e `/openapi.json`. Use `true` apenas em desenvolvimento local.
-- `ENABLE_DB_HEALTH_ENDPOINT`: libera `/health/db`. Em producao, mantenha `false` e use apenas `/health` como rota publica.
-- `ENABLE_NETWORK_DEBUG_ENDPOINT`: libera `/api/v1/admin/network-debug` para diagnostico temporario de IP/proxy. Em producao, mantenha `false`.
-- `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`: protegem a documentacao por autenticacao basica quando `ENABLE_API_DOCS=true`. A API recusa iniciar docs habilitada sem senha.
-- `LOG_LEVEL`: nivel minimo dos logs, como `INFO`, `WARNING` ou `ERROR`.
-- `LOG_FORMAT`: use `text` para leitura simples ou `json` para monitoramento externo.
-- `ALLOW_LOG_VERIFICATION_CODES`: se `true`, permite exibir codigos de verificacao nos logs para teste local. Em producao, mantenha `false`.
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SMTP_USE_SSL`, `SMTP_TIMEOUT_SECONDS` e `MAIL_FROM`: configuracao do servidor de email usado para enviar codigos de verificacao. Para Gmail, use `smtp.gmail.com`, porta `587`, `SMTP_USE_TLS=true` e senha de app.
-- `MAIL_FROM_NAME`: nome exibido como remetente do email.
-- `REPLY_TO_EMAIL`: email opcional para resposta/suporte. Pode ficar vazio.
-- `EMAIL_CODE_EXPIRE_MINUTES`: tempo de validade dos codigos temporarios.
-- `VERIFICATION_RESEND_COOLDOWN_SECONDS`: intervalo minimo para reenviar codigo de email/senha. O padrao de producao e 300 segundos.
-- `RATE_LIMIT_WINDOW_SECONDS`: janela, em segundos, usada no rate limit global.
-- `RATE_LIMIT_MAX_REQUESTS`: maximo de requisicoes gerais por IP + usuario/token dentro da janela.
-- `RATE_LIMIT_SENSITIVE_MAX_REQUESTS`: maximo para rotas sensiveis, como auth, cadastro, admin e alteracoes.
-- `RATE_LIMIT_PUBLIC_MAX_REQUESTS`: maximo para rotas publicas, como `/` e `/health`.
-- `RATE_LIMIT_POLLING_MAX_REQUESTS`: maximo para consultas frequentes, como notificacoes.
+- SMTP usa Gmail na porta 587 com TLS; somente `SMTP_USERNAME` e `SMTP_PASSWORD` ficam no ambiente. Os prazos de codigo e recuperacao sao politicas no codigo.
+- Rate limit por rota: os limites especificos de autenticacao, cadastro, dashboard, relatorios, chamados, notificacoes, administracao e webhook ficam descritos na secao de seguranca e centralizados em `app/core/security_policy.py`. Falhas de login: a cada grupo de 5 erros o bloqueio do contexto IP + email avanca na tabela progressiva da politica, chegando a 6 horas nas faixas mais altas.
 - `REDIS_URL`: opcional. Quando configurada, o rate limit global e os limites de login/recuperacao passam a ser compartilhados entre instancias da API. Sem Redis, os limites continuam locais em memoria.
-- `REDIS_RATE_LIMIT_PREFIX`: prefixo das chaves de rate limit criadas no Redis.
-- `REDIS_CONNECT_TIMEOUT_SECONDS` e `REDIS_OPERATION_TIMEOUT_SECONDS`: limites curtos para evitar que falha no Redis deixe a API lenta. Se o Redis ficar indisponivel, a API faz fallback temporario para memoria local.
-- `MAX_CONCURRENT_REQUESTS`: quantidade maxima de requisicoes processadas ao mesmo tempo por instancia.
-- `CONCURRENCY_WAIT_TIMEOUT_SECONDS`: tempo maximo que uma requisicao aguarda vaga antes de receber 503.
-- `MAX_REQUEST_BODY_BYTES`: tamanho maximo aceito para o corpo da requisicao. O padrao considera ate 3 imagens compactadas.
-- `MAX_REQUEST_URL_BYTES`: tamanho maximo de caminho + query string.
-- `MAX_REQUEST_HEADER_BYTES`: soma maxima dos headers da requisicao.
-- `MAX_REQUEST_HEADER_VALUE_BYTES`: tamanho maximo permitido para um unico header.
+- Limites de concorrencia, corpo, URL, headers, imagens e parametros do Redis ficam em `app/core/security_policy.py`.
 - `TRUSTED_PROXY_HOPS`: quantidade de proxies confiaveis usados para aceitar headers de IP real. O padrao `0` ignora headers enviados pelo cliente. Use `1` somente se a hospedagem confirmar que sobrescreve ou concatena esses headers corretamente.
-- `RUN_MIGRATIONS_ON_STARTUP`: controla se `main.py` aplica migracoes automaticamente ao iniciar. No deploy simples da Shard, mantenha `true`.
-- `STARTUP_LOCK_PATH`: caminho opcional do arquivo de lock de inicializacao. Se vazio e o banco for SQLite, o lock fica ao lado do `.db`.
-- `STARTUP_LOCK_TIMEOUT_SECONDS`: tempo maximo aguardando outro processo terminar migracao/admin inicial.
-- `STARTUP_LOCK_STALE_SECONDS`: idade minima para considerar um lock abandonado.
+- O lock de inicializacao fica ao lado do SQLite ou no diretorio temporario quando o banco e PostgreSQL.
+- As migracoes no `main.py` ficam habilitadas por codigo e protegidas por tempos de lock definidos na politica.
 
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
-Se o SMTP nao estiver configurado, a API gera o codigo, mas nao exibe o codigo nos logs por padrao. Para teste local, e possivel ativar `ALLOW_LOG_VERIFICATION_CODES=true`. Em producao, configure um SMTP real e mantenha essa opcao desligada.
+### Segurança local e CI
+
+Depois de instalar as dependências de desenvolvimento, rode:
+
+```bash
+python -m pytest -q
+python -m compileall -q app main.py
+python -m pip check
+pip-audit -r requirements-dev.txt
+```
+
+O workflow em `.github/workflows/security.yml` executa essas verificações principais em pull requests e pushes para `main`. O Dependabot em `.github/dependabot.yml` acompanha atualizações de pacotes Python e GitHub Actions.
+
+No Windows, a verificacao equivalente usa o interpretador do `.venv` e tambem
+pode validar o frontend local:
+
+```powershell
+.\tools\local_security_check.ps1
+.\tools\local_full_check.ps1
+```
+
+O segundo script executa lint e build do frontend depois da API. O
+`pip-audit` consulta o servico online de advisories; se a rede estiver
+indisponivel, a etapa falha com timeout explicito e nao deve ser interpretada
+como auditoria concluida.
+
+Se o SMTP nao estiver configurado, a API gera o codigo, mas nao exibe o codigo nos logs. Configure um SMTP real para testar o envio.
 
 ### SMTP com Gmail
 
-Para usar a conta `suporte.helpwebhealth@gmail.com`, ative a verificacao em duas etapas na conta Google e gere uma senha de app. No painel da Shard, configure:
+Para habilitar o envio via Gmail, use uma conta de suporte controlada por voce, ative a verificacao em duas etapas e gere uma senha de app. Configure os valores reais somente no painel privado da hospedagem:
 
 ```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=suporte.helpwebhealth@gmail.com
-SMTP_PASSWORD=sua_senha_de_app_do_google_sem_espacos
-SMTP_USE_TLS=true
-SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=30
-MAIL_FROM=suporte.helpwebhealth@gmail.com
-MAIL_FROM_NAME=HelpWeb Health
-REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
+SMTP_USERNAME=SEU_EMAIL@gmail.com
+SMTP_PASSWORD=COLOQUE_A_SENHA_DE_APP_NO_PAINEL
 ```
 
-Use a senha de app de 16 caracteres, nao a senha normal da conta Google. Se voce copiar a senha com espacos, a API remove os espacos automaticamente quando `SMTP_HOST=smtp.gmail.com`, mas o ideal e salvar sem espacos no painel.
+Use a senha de app de 16 caracteres, nao a senha normal da conta Google. Se voce copiar a senha com espacos, a API remove os espacos automaticamente; o ideal e salvar sem espacos no painel.
 
 ## Como rodar localmente
 
@@ -268,13 +226,42 @@ Execute a API:
 python main.py
 ```
 
+## Testes automatizados locais
+
+Os testes de desenvolvimento ficam separados das dependencias de producao.
+Eles usam um SQLite temporario, nao alteram `helphealth.db` e mantem
+`WHATSAPP_ENABLED=false`, portanto nao acessam Redis, Evolution API ou SMTP.
+
+Instale as dependencias de desenvolvimento uma vez:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+Execute a suite:
+
+```bash
+pytest
+```
+
+Antes de publicar uma alteracao, valide tambem a migration em uma copia do
+banco local e compile a API:
+
+```bash
+DATABASE_URL=sqlite:///./helphealth_test.db python -m alembic upgrade head
+python -m compileall -q app alembic
+```
+
+No Windows PowerShell, use `$env:DATABASE_URL=...` antes do comando. Nunca
+execute migrations de teste sobre o banco de producao sem uma copia.
+
 A API ficara disponivel em:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Documentacao interativa, se `ENABLE_API_DOCS=true` no `.env`:
+Documentacao interativa permanece desabilitada nesta versao por politica de codigo:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -282,9 +269,9 @@ http://127.0.0.1:8000/docs
 
 ## Migracoes do banco
 
-O projeto usa Alembic. Ao iniciar pelo `main.py`, as migracoes sao aplicadas automaticamente quando `RUN_MIGRATIONS_ON_STARTUP=true`.
+O projeto usa Alembic. Ao iniciar pelo `main.py`, as migracoes sao aplicadas automaticamente por politica de codigo.
 
-No deploy simples com SQLite, `main.py` usa um lock de arquivo antes de rodar migracoes e criar o admin inicial. Isso reduz risco de corrida se a hospedagem iniciar mais de um processo ao mesmo tempo. Em um deploy mais maduro, especialmente com PostgreSQL e CI/CD, prefira rodar `alembic upgrade head` como etapa separada do deploy e usar `RUN_MIGRATIONS_ON_STARTUP=false`.
+No deploy simples com SQLite, `main.py` usa um lock de arquivo antes de rodar migracoes e criar o admin inicial. Isso reduz risco de corrida se a hospedagem iniciar mais de um processo ao mesmo tempo. Os tempos do lock ficam em `app/core/security_policy.py`.
 
 As migrations atuais foram revisadas para funcionar tanto em SQLite quanto em PostgreSQL, incluindo campos booleanos usados na verificacao de email.
 
@@ -302,15 +289,8 @@ No painel da API na Shard, troque apenas a variavel `DATABASE_URL` pela URL do P
 DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
 ```
 
-Mantenha tambem:
-
-```env
-RUN_MIGRATIONS_ON_STARTUP=true
-DB_POOL_SIZE=5
-DB_MAX_OVERFLOW=10
-DB_POOL_TIMEOUT_SECONDS=30
-DB_POOL_RECYCLE_SECONDS=1800
-```
+As migracoes rodam automaticamente no boot e os limites do pool ficam na
+politica versionada do backend.
 
 Depois reinicie ou faça novo deploy da API. Na primeira subida com o banco vazio, o Alembic cria as tabelas e o `main.py` cria o admin inicial usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`.
 
@@ -334,6 +314,8 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - Login executa uma verificacao bcrypt equivalente mesmo quando o email nao existe, reduzindo enumeracao por diferenca de tempo.
 - Bloqueio de login considera tambem a conta/e-mail, nao apenas IP, reduzindo bypass por spoofing de cabecalho.
 - Rotas publicas e consultas de polling possuem limites proprios para reduzir abuso.
+- A autenticacao tambem e declarada no nivel dos routers: dashboard e relatorios exigem tecnico ou administrador; administracao exige administrador; notificacoes, comentarios e demais operacoes de chamados exigem usuario autenticado; o webhook da Evolution usa segredo proprio, sem aceitar sessao de navegador.
+- O rate limit e separado por operacao e usa a combinacao de escopo, IP e identidade da sessao quando disponivel: login `40/min`, recuperacao `20/min`, cadastro `10/min`, dashboard `30/min`, relatorio JSON `20/min`, PDF `5/min`, leitura de chamados `120/min`, escrita de chamados/comentarios `40/min`, notificacoes `60/min`, leitura administrativa `30/min`, escrita administrativa `20/min` e webhook `120/min`. As capacidades e taxas ficam centralizadas em `app/core/security_policy.py`; a instancia local usa Token Bucket e Redis permanece opcional para distribuicao futura.
 - A API limita tamanho de corpo, URL e headers antes de processar a requisicao, inclusive quando o corpo chega em stream sem `Content-Length`.
 - A API possui limite de concorrencia por instancia para reduzir saturacao por rajadas de requests.
 - `REDIS_URL` pode ser configurada para rate limit distribuido entre instancias, incluindo login e recuperacao de conta. Sem Redis, a API usa limite local em memoria, adequado para uma unica instancia.
@@ -346,12 +328,10 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - CORS usa lista fixa de origens em `ALLOWED_ORIGINS`; em producao, evite `*`.
 - Requisicoes para `/api/` vindas de `Origin` fora da lista autorizada sao bloqueadas tambem no middleware da API.
 - IP de log/rate limit usa headers de proxy somente quando `TRUSTED_PROXY_HOPS` e habilitado. A ordem de preferencia e `CF-Connecting-IP`, `X-Real-IP` e `X-Forwarded-For`.
-- `/docs`, `/redoc` e `/openapi.json` ficam desabilitados quando `ENABLE_API_DOCS=false`.
-- Quando `ENABLE_API_DOCS=true`, a documentacao precisa de `API_DOCS_USERNAME` e `API_DOCS_PASSWORD`; sem senha, a API nao inicia.
-- `/health/db` fica desabilitado quando `ENABLE_DB_HEALTH_ENDPOINT=false`; `/health` continua disponivel para a hospedagem.
+- `/docs`, `/redoc`, `/openapi.json`, `/health/db` e o endpoint de diagnostico de proxy ficam desabilitados por politica de codigo; `/health` continua disponivel para a hospedagem.
 - Uploads em Data URL sao validados no backend por tipo permitido, base64 valido, assinatura real de imagem e tamanho. O limite foi ajustado para aceitar fotos de celular compactadas sem permitir imagens brutas excessivas no banco SQLite.
 - Codigos temporarios de email/senha sao armazenados apenas como HMAC, nao em texto puro.
-- O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs.
+- O backend nao grava senhas, tokens JWT, codigo digitado ou email completo em logs; codigos de verificacao tambem nao sao liberados por variavel de ambiente.
 - Novas senhas exigem pelo menos 10 caracteres, letras e numeros, e rejeitam padroes previsiveis.
 - A API impede que um administrador altere o proprio papel ou remova o papel do ultimo administrador restante.
 - Conexoes PostgreSQL remotas usam `sslmode=require` por padrao, mesmo quando a URL original nao informa SSL.
@@ -359,11 +339,11 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - O projeto pode usar SQLite em deploy simples, mas PostgreSQL e recomendado para ambiente real por oferecer melhor concorrencia, backup, isolamento e recursos de seguranca do banco gerenciado.
 - O arquivo SQLite nao e criptografado integralmente por padrao; para dados reais, prefira PostgreSQL gerenciado com criptografia em repouso, backup e controle de acesso.
 - A listagem administrativa de usuarios retorna email mascarado e nao envia foto/base64 em massa.
-- Administradores podem habilitar temporariamente `/api/v1/admin/network-debug` para diagnosticar headers de proxy/IP sem expor cookies, tokens ou Authorization.
+- O endpoint `/api/v1/admin/network-debug` fica desabilitado no codigo depois da validacao do proxy da Shard.
 - Telefones de perfil e cadastro aceitam apenas numeros do Brasil no formato DDD + numero, sem DDI ou `+55`.
 - Novos cadastros precisam confirmar email antes de abrir chamados.
 - Eventos sensiveis sao registrados em trilha de auditoria persistente (`audit_events`) sem gravar senha, token, codigo temporario ou email completo.
-- Redis nao e obrigatorio nesta versao. Quando disponivel, pode ser configurado por `REDIS_URL` para rate limit distribuido; cache e fila de emails continuam como evolucao futura.
+- Redis nao e obrigatorio nesta versao. Quando disponivel, pode ser configurado somente por `REDIS_URL` para rate limit distribuido e fila WhatsApp; os nomes de chaves e timeouts ficam no codigo.
 - O repositorio inclui workflow de GitHub Actions para compilar o backend e executar `pip-audit`.
 
 ## Recuperacao de conta
@@ -386,7 +366,7 @@ Esse fluxo usa a mesma tabela de verificacao temporaria de email/senha, com prop
 
 ## Notificacoes internas
 
-Quando um funcionario abre um chamado ou reabre um chamado resolvido/fechado, a API cria notificacoes para usuarios com perfil `technician` e `admin`. A regra fica no backend, nao no frontend.
+Quando um funcionario abre um chamado ou reabre um chamado resolvido/fechado, a API cria notificacoes para tecnicos conforme o vinculo e o tipo do evento. O administrador nao e destinatario da caixa comum de notificacoes, mas pode consultar o historico global pela area administrativa. A regra fica no backend, nao no frontend.
 
 Endpoints:
 
@@ -404,6 +384,60 @@ Regras principais:
 - o limite de retorno vai ate 50 registros por chamada;
 - notificacoes relacionadas a tickets ou usuarios removidos sao limpas/ajustadas pelos servicos de negocio.
 
+A tela administrativa usa o endpoint agrupado abaixo para mostrar um resumo por
+chamado, em vez de carregar eventos soltos sem limite no navegador:
+
+```text
+GET /api/v1/admin/ticket-events?search=&skip=0&limit=20
+```
+
+Essa rota exige `admin`, pesquisa por codigo numerico, codigo formatado, titulo,
+descricao, setor ou categoria e retorna no maximo 50 chamados por pagina. O
+historico detalhado continua sendo carregado sob demanda pela timeline protegida
+do chamado, evitando uma consulta N+1 e reduzindo o volume de dados exposto.
+
+## Dados ficticios para testes locais
+
+O arquivo `tools/generate_demo_data.py` cria dados variados para testar
+dashboard, relatorios, fila, busca, permissao, pagina de eventos e timeline.
+Por seguranca, o script aceita somente `DATABASE_URL` SQLite e nunca deve ser
+executado contra PostgreSQL ou contra a hospedagem.
+
+Com a API parada e dentro da pasta do backend, use:
+
+```powershell
+python -m alembic upgrade head
+python tools/generate_demo_data.py --count 200
+```
+
+As contas criadas usam emails `@example.com`, reservados para exemplos, possuem email confirmado e a
+senha local de teste `DemoSenha123!`. O script cria um administrador demo,
+tecnicos demo e usuarios solicitantes. Os chamados recebem distribuicao de
+status, prioridades, impactos, setores, categorias, tecnicos, eventos e alguns
+comentarios, sem imagens.
+
+Para substituir somente os dados ficticios e gerar uma nova distribuicao:
+
+```powershell
+python tools/generate_demo_data.py --count 200 --reset
+```
+
+Os registros de demonstracao possuem o prefixo `DEMO-` e o script nao remove
+usuarios ou chamados reais. O `--reset` tambem reconhece o prefixo antigo
+`[DEMO]` para limpar uma carga criada por uma versao anterior do script. Mesmo
+assim, mantenha um backup do banco local antes de usar `--reset`.
+
+### Carga remota opcional para graficos
+
+`tools/seed_shard_demo_data.py` e uma ferramenta administrativa executada no
+seu computador, nao uma rota da API. Ela se conecta ao PostgreSQL informado e
+adiciona somente usuarios comuns, chamados, eventos e comentarios; nao cria
+admins/tecnicos, nao envia emails e nao apaga nem atualiza dados. O padrao e
+simulacao. Para gravar, exige `--apply` e uma confirmacao digitada com o host.
+Faca backup antes: a carga e permanente e nao tem limpeza automatica. A URL do
+banco deve ser fornecida interativamente pelo PowerShell, nunca colocada neste
+README, no `.env` versionado ou na linha de comando.
+
 ## Diagnostico de IP real na hospedagem
 
 A rota abaixo existe para confirmar como a hospedagem encaminha o IP real do visitante para a API, mas fica desligada por padrao:
@@ -412,17 +446,9 @@ A rota abaixo existe para confirmar como a hospedagem encaminha o IP real do vis
 GET /api/v1/admin/network-debug
 ```
 
-Para usar temporariamente, configure:
-
-```env
-ENABLE_NETWORK_DEBUG_ENDPOINT=true
-```
-
-Depois do teste, volte para:
-
-```env
-ENABLE_NETWORK_DEBUG_ENDPOINT=false
-```
+Nesta versao a rota permanece desabilitada no codigo depois da validacao do
+proxy. Para uma nova investigacao, ela deve ser habilitada somente em uma
+alteracao local controlada e nunca como variavel de ambiente de producao.
 
 Mesmo habilitada, ela exige login como administrador e retorna apenas:
 
@@ -445,7 +471,9 @@ Em uma VPS ou outra plataforma, mantenha `TRUSTED_PROXY_HOPS=0` se a API receber
 
 Os logs evitam expor dados sensiveis desnecessarios. Emails de login e envio SMTP sao mascarados, por exemplo `an***9@gmail.com`. Por seguranca, a API ignora `X-Forwarded-For`, `X-Real-IP` e `CF-Connecting-IP` por padrao. Configure `TRUSTED_PROXY_HOPS=1` apenas depois de confirmar o comportamento do proxy da hospedagem.
 
-Os logs HTTP tambem usam nomes de acao para facilitar a leitura no terminal, por exemplo `ticket.create`, `auth.login`, `ticket.resolve`, `notification.list` e `report.overview`. Requisicoes automaticas de `/health` e preflight `OPTIONS` bem-sucedidas ficam em `DEBUG`, reduzindo ruido quando `LOG_LEVEL=INFO`; erros continuam aparecendo em `WARNING` ou `ERROR`.
+Os logs HTTP usam nomes de acao para facilitar a leitura no terminal, por exemplo `ticket.create`, `auth.login`, `ticket.resolve`, `admin.ticket_events`, `notification.list` e `report.overview`. Cada evento informa o resultado, o status com descricao (`401 Unauthorized`, por exemplo), o metodo, a rota, a duracao, o IP tecnico resolvido, a identidade mascarada e o `request_id` para correlacionar uma falha entre os componentes. Requisicoes automaticas de `/health` e preflight `OPTIONS` bem-sucedidas ficam em `DEBUG`; erros continuam aparecendo em `WARNING` ou `ERROR`.
+
+No formato textual, os eventos da aplicacao recebem uma linha em branco curta para facilitar a leitura no terminal. Stack traces detalhados permanecem desligados por politica para nao despejar dados de entrada ou caminhos internos no log comum.
 
 ## Padrao de status HTTP
 
@@ -464,7 +492,7 @@ A API segue o padrao REST principal:
 
 ## Admin inicial
 
-O administrador inicial e criado automaticamente na primeira execucao usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`. Scripts de seed de usuarios/chamados de demonstracao foram removidos para evitar credenciais fixas em codigo versionado.
+O administrador inicial e criado automaticamente na primeira execucao usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`. Nao existe seed de dados ficticios no boot de producao; a carga opcional para testes locais fica isolada em `tools/generate_demo_data.py`, aceita somente SQLite e usa contas marcadas como demonstracao.
 
 ## Deploy na Shard
 
@@ -472,59 +500,20 @@ Configure as variaveis de ambiente pelo painel da Shard:
 
 ```env
 DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
-DB_POOL_SIZE=5
-DB_MAX_OVERFLOW=10
-DB_POOL_TIMEOUT_SECONDS=30
-DB_POOL_RECYCLE_SECONDS=1800
 SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
-AUTH_COOKIE_NAME=helpwebhealth_session
 AUTH_COOKIE_SECURE=true
 AUTH_COOKIE_SAMESITE=none
 AUTH_COOKIE_DOMAIN=
 ADMIN_EMAIL=email_do_administrador
 ADMIN_PASSWORD=senha_inicial_forte_com_12_ou_mais_caracteres
 ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app
-ENABLE_API_DOCS=false
-ENABLE_DB_HEALTH_ENDPOINT=false
-ENABLE_NETWORK_DEBUG_ENDPOINT=false
-API_DOCS_USERNAME=admin
-API_DOCS_PASSWORD=
-LOG_LEVEL=INFO
-LOG_FORMAT=text
-ALLOW_LOG_VERIFICATION_CODES=false
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=suporte.helpwebhealth@gmail.com
-SMTP_PASSWORD=senha_de_app_do_gmail_sem_espacos
-SMTP_USE_TLS=true
-SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=30
-MAIL_FROM=suporte.helpwebhealth@gmail.com
-MAIL_FROM_NAME=HelpWeb Health
-REPLY_TO_EMAIL=suporte.helpwebhealth@gmail.com
-VERIFICATION_RESEND_COOLDOWN_SECONDS=300
-RATE_LIMIT_WINDOW_SECONDS=60
-RATE_LIMIT_MAX_REQUESTS=240
-RATE_LIMIT_SENSITIVE_MAX_REQUESTS=40
-RATE_LIMIT_PUBLIC_MAX_REQUESTS=120
-RATE_LIMIT_POLLING_MAX_REQUESTS=80
+SMTP_USERNAME=SEU_EMAIL@gmail.com
+SMTP_PASSWORD=COLOQUE_A_SENHA_DE_APP_NO_PAINEL
 REDIS_URL=
-REDIS_RATE_LIMIT_PREFIX=helpwebhealth:rate
-REDIS_CONNECT_TIMEOUT_SECONDS=1.0
-REDIS_OPERATION_TIMEOUT_SECONDS=1.0
-MAX_CONCURRENT_REQUESTS=80
-CONCURRENCY_WAIT_TIMEOUT_SECONDS=0.25
-MAX_REQUEST_BODY_BYTES=6000000
-MAX_REQUEST_URL_BYTES=2048
-MAX_REQUEST_HEADER_BYTES=32000
-MAX_REQUEST_HEADER_VALUE_BYTES=8000
 TRUSTED_PROXY_HOPS=1
-RUN_MIGRATIONS_ON_STARTUP=true
-STARTUP_LOCK_TIMEOUT_SECONDS=120
-STARTUP_LOCK_STALE_SECONDS=300
 ```
 
-No Gmail, `SMTP_USERNAME` e `MAIL_FROM` devem usar o email completo da conta. A senha deve ser uma senha de app criada na conta Google, nunca a senha normal de login.
+No Gmail, `SMTP_USERNAME` deve usar o email completo da conta. A senha deve ser uma senha de app criada na conta Google, nunca a senha normal de login.
 
 Comando de inicializacao:
 
@@ -550,3 +539,82 @@ Esses arquivos ja estao cobertos pelo `.gitignore`.
 ## Observacoes para o TCC
 
 Este backend representa a camada de regras de negocio do sistema. Ele demonstra autenticacao, controle de permissao, persistencia via ORM, separacao entre rotas e servicos, migracoes de banco, indicadores operacionais e adequacao ao contexto da saude publica sem entrar no dominio de prontuario ou informacao clinica sensivel.
+
+## Notificacoes por WhatsApp
+
+O backend possui uma fila duravel para notificacoes de chamados usando Redis
+Streams e um worker separado. O provedor externo previsto e a Evolution API
+com uma instancia WhatsApp no modo Baileys. Nesta primeira versao o fluxo e
+somente de saida: o sistema envia avisos, mas nao interpreta respostas pelo
+WhatsApp.
+
+Regras de destinatarios:
+
+- abertura de chamado: tecnicos ativos e inscritos;
+- reabertura, comentario e mudanca de status: usuario dono e tecnico vinculado;
+- administradores: nao recebem a caixa comum, mas consultam os eventos em rota administrativa;
+- o backend decide os destinatarios e repete a autorizacao ao abrir o chamado.
+
+O processo HTTP grava o chamado, o evento e a entrega pendente no PostgreSQL.
+O worker publica a entrega no Redis e chama a Evolution API. Falhas externas
+geram novas tentativas limitadas, sem desfazer a operacao do chamado.
+
+Variaveis adicionais na hospedagem:
+
+```text
+REDIS_URL=redis://...
+WHATSAPP_ENABLED=true
+EVOLUTION_API_URL=https://...
+EVOLUTION_API_KEY=...
+EVOLUTION_INSTANCE=helpwebhealth
+EVOLUTION_WEBHOOK_SECRET=...
+WHATSAPP_FRONTEND_BASE_URL=https://frontendhelpwebhealth.shardweb.app
+```
+
+Quando `WHATSAPP_ENABLED=true`, as cinco variaveis da Evolution acima e o
+`REDIS_URL` sao obrigatorios. `EVOLUTION_WEBHOOK_SECRET` deve ser um segredo
+aleatorio configurado tambem no webhook do provedor; ele nunca deve ser
+colocado no frontend, em mensagens ou em logs.
+
+Comando do worker, em um segundo servico da hospedagem:
+
+```bash
+python -m app.workers.whatsapp_worker
+```
+
+O webhook `POST /api/v1/webhooks/evolution` serve apenas para atualizar o
+status de entrega e exige `EVOLUTION_WEBHOOK_SECRET`. Ele nao habilita respostas
+ou comandos recebidos pelo WhatsApp.
+
+## Busca e paginação
+
+O rate limit local usa Token Bucket por escopo, IP e identidade da sessao. A
+capacidade inicial permite pequenos picos e os tokens sao repostos ao longo do
+tempo, sem depender de Redis. O dicionario local possui limite de chaves e
+remove entradas ociosas ou antigas para nao crescer indefinidamente. Redis
+continua opcional para uma futura execucao com varias instancias.
+
+As respostas tambem informam `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset` e, quando bloqueadas, `Retry-After`.
+
+`GET /api/v1/tickets/` aceita o parametro opcional `search` para localizar um
+chamado pelo numero do codigo, titulo ou descricao. A API aplica primeiro o
+escopo de visibilidade do usuario e somente depois executa a busca, evitando
+que um usuario descubra chamados de outra pessoa.
+
+As listagens usam `limit + 1` para informar `has_more` sem executar uma
+contagem total a cada pesquisa ou troca de pagina. O campo `total` e opcional e
+so e calculado quando uma tela de resumo solicita explicitamente
+`include_total=true`. Isso reduz custo no banco e evita acumular registros no
+frontend; a interface descarta a pagina anterior antes de renderizar a nova.
+
+`GET /api/v1/admin/users` e exclusivo para administradores e aceita `search`
+por inicio do nome, `role`, `is_active`, `order_by`, `direction`, `skip` e
+`limit`. A ordenacao tambem e validada pela API, sem aceitar nomes de colunas
+arbitrarios. A resposta possui
+`items`, `total` opcional, `skip`, `limit` e `has_more`; nenhuma dessas
+listagens carrega todos os registros em memoria. Os limites da API tambem
+impedem paginas excessivamente grandes. A migration
+`g7h8i9j0k1l2_search_performance_indexes` cria os indices usados pela pesquisa
+de nomes e pela fila de chamados excluidos, incluindo o indice por
+`lower(name)` no PostgreSQL.

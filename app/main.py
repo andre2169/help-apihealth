@@ -1,14 +1,18 @@
 import secrets
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.core.logging_config import setup_logging
+from app.core import security_policy as policy
 from app.middlewares import (
     ConcurrencyLimitMiddleware,
+    CSRFMiddleware,
     ExceptionMiddleware,
     OriginCheckMiddleware,
     RateLimitMiddleware,
@@ -26,6 +30,7 @@ from app.api.v1 import (
     dashboard,
     notifications,
     reports,
+    webhooks,
 )
 
 setup_logging()
@@ -40,11 +45,22 @@ app = FastAPI(
     openapi_url=None,
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Dados inválidos. Revise os campos e tente novamente."},
+    )
+
 docs_security = HTTPBasic(auto_error=False)
 
 
 def require_docs_access(credentials: HTTPBasicCredentials | None = Depends(docs_security)):
-    if not settings.API_DOCS_PASSWORD:
+    if not policy.API_DOCS_PASSWORD:
         return True
 
     if not credentials:
@@ -54,8 +70,8 @@ def require_docs_access(credentials: HTTPBasicCredentials | None = Depends(docs_
             headers={"WWW-Authenticate": "Basic"},
         )
 
-    valid_user = secrets.compare_digest(credentials.username, settings.API_DOCS_USERNAME)
-    valid_password = secrets.compare_digest(credentials.password, settings.API_DOCS_PASSWORD)
+    valid_user = secrets.compare_digest(credentials.username, policy.API_DOCS_USERNAME)
+    valid_password = secrets.compare_digest(credentials.password, policy.API_DOCS_PASSWORD)
 
     if not (valid_user and valid_password):
         raise HTTPException(
@@ -72,6 +88,7 @@ app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 app.add_middleware(ConcurrencyLimitMiddleware)
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(ExceptionMiddleware)
 
 # CORS fica por último para envolver inclusive respostas de erro geradas por middleware.
@@ -82,8 +99,22 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
-    expose_headers=["X-Request-ID", "Retry-After", "Content-Disposition"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Request-ID",
+        policy.CSRF_HEADER_NAME,
+    ],
+    expose_headers=[
+        "X-Request-ID",
+        "Retry-After",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Content-Disposition",
+        policy.CSRF_HEADER_NAME,
+    ],
 )
 
 
@@ -98,9 +129,10 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
+app.include_router(webhooks.router, prefix="/api/v1")
 
 
-if settings.ENABLE_API_DOCS:
+if policy.ENABLE_API_DOCS:
     @app.get("/openapi.json", include_in_schema=False)
     def openapi_schema(_: bool = Depends(require_docs_access)):
         return get_openapi(
@@ -134,7 +166,7 @@ def health_check():
     return {"status": "ok"}
 
 
-if settings.ENABLE_DB_HEALTH_ENDPOINT:
+if policy.ENABLE_DB_HEALTH_ENDPOINT:
     @app.get("/health/db")
     def database_health_check():
         with engine.connect() as connection:
@@ -145,6 +177,6 @@ if settings.ENABLE_DB_HEALTH_ENDPOINT:
 @app.get("/")
 def root():
     response = {"name": "HelpWeb Health API", "status": "ok"}
-    if settings.ENABLE_API_DOCS:
+    if policy.ENABLE_API_DOCS:
         response["docs"] = "/docs"
     return response

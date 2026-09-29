@@ -9,6 +9,9 @@ from app.core.exceptions import (
     TicketInvalidStatus,
     TicketPermissionDenied,
 )
+from app.core.events import create_ticket_event
+from app.services.audit.events import record_audit_event
+from app.services.notifications.service import create_notifications_for_event
 
 
 def create_comment_service(
@@ -18,7 +21,11 @@ def create_comment_service(
     content: str,
     current_user: User,
 ) -> Comment:
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.deleted_at.is_(None))
+        .first()
+    )
 
     if not ticket:
         raise TicketNotFound()
@@ -50,6 +57,28 @@ def create_comment_service(
     )
 
     db.add(comment)
+    db.flush()
+
+    event = create_ticket_event(
+        db=db,
+        ticket_id=ticket.id,
+        user_id=current_user.id,
+        event_type="COMMENTED",
+    )
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="ticket.comment_created",
+        target_type="ticket",
+        target_id=ticket.id,
+    )
+    create_notifications_for_event(
+        db=db,
+        ticket=ticket,
+        event=event,
+        actor=current_user,
+    )
+
     db.commit()
     db.refresh(comment)
 

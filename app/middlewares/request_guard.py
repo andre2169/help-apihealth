@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.config import settings
+from app.core import security_policy as policy
 from app.core.request_context import get_client_ip
 from app.middlewares.common import JSON_ERROR_HEADERS
 
@@ -26,7 +26,7 @@ class RequestGuardMiddleware:
         raw_headers = scope.get("headers", [])
         path_length = len(scope.get("raw_path", b"")) + len(scope.get("query_string", b""))
 
-        if path_length > settings.MAX_REQUEST_URL_BYTES:
+        if path_length > policy.MAX_REQUEST_URL_BYTES:
             logger.warning(
                 "URL bloqueada por tamanho | method=%s | path=%s | ip=%s | bytes=%s",
                 method,
@@ -50,7 +50,7 @@ class RequestGuardMiddleware:
             header_value = value.decode("latin-1", errors="ignore")
             headers.setdefault(header_name, []).append(header_value)
 
-            if len(value) > settings.MAX_REQUEST_HEADER_VALUE_BYTES:
+            if len(value) > policy.MAX_REQUEST_HEADER_VALUE_BYTES:
                 logger.warning(
                     "Header bloqueado por tamanho | method=%s | path=%s | ip=%s | header=%s",
                     method,
@@ -66,7 +66,7 @@ class RequestGuardMiddleware:
                 await response(scope, receive, send)
                 return
 
-        if header_total > settings.MAX_REQUEST_HEADER_BYTES:
+        if header_total > policy.MAX_REQUEST_HEADER_BYTES:
             logger.warning(
                 "Requisição bloqueada por soma de headers | method=%s | path=%s | ip=%s | bytes=%s",
                 method,
@@ -105,7 +105,7 @@ class RequestGuardMiddleware:
                 await response(scope, receive, send)
                 return
 
-            if request_body_bytes > settings.MAX_REQUEST_BODY_BYTES:
+            if request_body_bytes > policy.MAX_REQUEST_BODY_BYTES:
                 logger.warning(
                     "Requisição bloqueada por tamanho de corpo | method=%s | path=%s | ip=%s | bytes=%s",
                     method,
@@ -153,7 +153,7 @@ class RequestGuardMiddleware:
                 break
 
             received_bytes += len(message.get("body", b""))
-            if received_bytes > settings.MAX_REQUEST_BODY_BYTES:
+            if received_bytes > policy.MAX_REQUEST_BODY_BYTES:
                 logger.warning(
                     "Requisição bloqueada por stream de corpo | method=%s | path=%s | ip=%s | bytes=%s",
                     method,

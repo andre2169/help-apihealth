@@ -4,6 +4,7 @@ import ssl
 from email.utils import formataddr, formatdate
 from email.message import EmailMessage
 
+from app.core import security_policy as policy
 from app.core.config import settings
 from app.core.request_context import mask_email
 
@@ -19,7 +20,7 @@ def _smtp_password() -> str | None:
     if not settings.SMTP_PASSWORD:
         return None
 
-    if (settings.SMTP_HOST or "").strip().lower() == "smtp.gmail.com":
+    if policy.SMTP_HOST == "smtp.gmail.com":
         return settings.SMTP_PASSWORD.replace(" ", "")
 
     return settings.SMTP_PASSWORD
@@ -56,35 +57,34 @@ def send_email(*, to_email: str, subject: str, body: str) -> bool:
         return False
 
     message = EmailMessage()
-    from_name = settings.MAIL_FROM_NAME or "HelpWeb Health"
-    message["From"] = formataddr((from_name, settings.MAIL_FROM))
+    from_name = policy.MAIL_FROM_NAME
+    message["From"] = formataddr((from_name, settings.SMTP_USERNAME))
     message["To"] = to_email
     message["Subject"] = subject
     message["Date"] = formatdate(localtime=True)
-    if settings.REPLY_TO_EMAIL:
-        message["Reply-To"] = settings.REPLY_TO_EMAIL
+    message["Reply-To"] = settings.SMTP_USERNAME
     message.set_content(body)
     message.add_alternative(_html_body(body), subtype="html")
 
     context = ssl.create_default_context()
     password = _smtp_password()
 
-    if settings.SMTP_USE_SSL:
+    if policy.SMTP_USE_SSL:
         smtp_client = smtplib.SMTP_SSL(
-            settings.SMTP_HOST,
-            settings.SMTP_PORT,
-            timeout=settings.SMTP_TIMEOUT_SECONDS,
+            policy.SMTP_HOST,
+            policy.SMTP_PORT,
+            timeout=policy.SMTP_TIMEOUT_SECONDS,
             context=context,
         )
     else:
         smtp_client = smtplib.SMTP(
-            settings.SMTP_HOST,
-            settings.SMTP_PORT,
-            timeout=settings.SMTP_TIMEOUT_SECONDS,
+            policy.SMTP_HOST,
+            policy.SMTP_PORT,
+            timeout=policy.SMTP_TIMEOUT_SECONDS,
         )
 
     with smtp_client as smtp:
-        if settings.SMTP_USE_TLS:
+        if policy.SMTP_USE_TLS:
             smtp.starttls(context=context)
         if settings.SMTP_USERNAME and password:
             smtp.login(settings.SMTP_USERNAME, password)
@@ -92,10 +92,10 @@ def send_email(*, to_email: str, subject: str, body: str) -> bool:
 
     logger.info(
         "Email aceito pelo SMTP | host=%s | port=%s | tls=%s | ssl=%s | to=%s | subject=%s",
-        settings.SMTP_HOST,
-        settings.SMTP_PORT,
-        settings.SMTP_USE_TLS,
-        settings.SMTP_USE_SSL,
+        policy.SMTP_HOST,
+        policy.SMTP_PORT,
+        policy.SMTP_USE_TLS,
+        policy.SMTP_USE_SSL,
         mask_email(to_email),
         subject,
     )

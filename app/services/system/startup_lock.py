@@ -4,6 +4,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from app.core import security_policy as policy
 from app.core.config import settings
 
 
@@ -20,8 +21,8 @@ def _sqlite_database_path() -> Path | None:
 
 
 def _default_lock_path() -> Path:
-    if settings.STARTUP_LOCK_PATH:
-        return Path(settings.STARTUP_LOCK_PATH).expanduser().resolve()
+    if policy.STARTUP_LOCK_PATH:
+        return Path(policy.STARTUP_LOCK_PATH).expanduser().resolve()
 
     sqlite_path = _sqlite_database_path()
     if sqlite_path:
@@ -36,11 +37,11 @@ def _is_stale_lock(lock_path: Path, now: float) -> bool:
     except FileNotFoundError:
         return False
 
-    return age > settings.STARTUP_LOCK_STALE_SECONDS
+    return age > policy.STARTUP_LOCK_STALE_SECONDS
 
 
 def _acquire_lock(lock_path: Path) -> int:
-    deadline = time.monotonic() + settings.STARTUP_LOCK_TIMEOUT_SECONDS
+    deadline = time.monotonic() + policy.STARTUP_LOCK_TIMEOUT_SECONDS
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     while True:

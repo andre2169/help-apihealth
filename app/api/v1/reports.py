@@ -12,7 +12,11 @@ from app.services.reports.metrics import reports_overview_service
 from app.services.reports.pdf import build_reports_overview_pdf, report_pdf_filename
 
 
-router = APIRouter(prefix="/reports", tags=["Reports"])
+router = APIRouter(
+    prefix="/reports",
+    tags=["Reports"],
+    dependencies=[Depends(require_technician)],
+)
 MAX_REPORT_RANGE_DAYS = 366
 
 
@@ -113,7 +117,7 @@ def reports_overview_pdf(
         sector=_clean_optional_filter(sector, "Setor", 30),
         operational_impact=operational_impact.value if operational_impact else None,
     )
-    pdf_bytes = build_reports_overview_pdf(data)
+    pdf_bytes = build_reports_overview_pdf(data, viewer_role=current_user.role)
     filename = report_pdf_filename(data.get("filters"))
 
     return Response(

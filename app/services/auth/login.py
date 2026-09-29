@@ -1,10 +1,7 @@
-from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from app.db.models.user import User
 from app.core.security import hash_password, verify_password
-from app.core.auth import create_access_token
-from app.core.config import settings
 from app.core.exceptions import InvalidCredentials
 
 
@@ -29,17 +26,7 @@ def login_service(
     hash_to_check = user.password_hash if user else _DUMMY_PASSWORD_HASH
     password_ok = verify_password(password, hash_to_check)
 
-    if not user or not password_ok:
+    if not user or not user.is_active or not password_ok:
         raise InvalidCredentials()
 
-    access_token = create_access_token(
-        data={"sub": str(user.id), "session_version": user.session_version or 1},
-        expires_delta=timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-    }
+    return user

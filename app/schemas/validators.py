@@ -83,12 +83,13 @@ def validate_optional_phone(value: object) -> str | None:
         return None
 
     raw_value = str(value).strip()
-    digits = re.sub(r"\D", "", str(value))
-    if not digits:
+    if not raw_value:
         return None
 
-    if raw_value.startswith("+") or (digits.startswith("55") and len(digits) in (12, 13)):
-        raise ValueError("Informe somente DDD brasileiro e número, sem DDI ou +55.")
+    if not re.fullmatch(r"[0-9]+", raw_value):
+        raise ValueError("Informe somente números do telefone brasileiro, sem DDI ou símbolos.")
+
+    digits = raw_value
 
     if not PHONE_RE.fullmatch(digits):
         raise ValueError("Informe telefone brasileiro com DDD e 10 ou 11 números.")
@@ -176,6 +177,8 @@ def validate_password(value: object) -> str:
         raise ValueError("A senha deve ter pelo menos 10 caracteres.")
     if len(password) > 128:
         raise ValueError("A senha deve ter no máximo 128 caracteres.")
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("A senha ficou muito longa. Tente uma senha menor.")
     if any(unicodedata.category(char).startswith("C") for char in password):
         raise ValueError("A senha contém caracteres inválidos.")
     if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", password) or not re.search(r"\d", password):

@@ -7,7 +7,11 @@ from app.deps import get_db
 from app.services.reports.metrics import dashboard_summary_service
 
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["Dashboard"],
+    dependencies=[Depends(require_technician)],
+)
 
 
 @router.get("/summary")

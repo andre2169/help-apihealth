@@ -1,5 +1,6 @@
-from pydantic import BaseModel, EmailStr, Field
-from pydantic import field_validator
+from typing import Literal
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.validators import normalize_email_address, validate_password
 
@@ -47,5 +48,14 @@ class AccountRecoveryConfirm(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    status: str = "ok"
-    token_type: str = "cookie"
+    status: Literal["ok", "verification_required"] = "ok"
+    token_type: Literal["cookie"] | None = "cookie"
+    challenge_id: str | None = None
+    delivery: Literal["email", "log"] | None = None
+    expires_in_minutes: int | None = None
+    message: str | None = None
+
+
+class LoginMFAConfirm(BaseModel):
+    challenge_id: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")

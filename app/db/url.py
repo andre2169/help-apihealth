@@ -17,9 +17,12 @@ def normalize_database_url(database_url: str) -> str:
         host = (parts.hostname or "").lower()
         is_local_host = host in LOCAL_DATABASE_HOSTS
 
-        if not query.get("sslmode") and (
-            ssl_value in {"true", "1", "require"} or not is_local_host
-        ):
+        sslmode = str(query.get("sslmode", "")).lower()
+        secure_ssl_modes = {"require", "verify-ca", "verify-full"}
+        if not is_local_host and sslmode not in secure_ssl_modes:
+            # Uma URL remota nunca deve conseguir desativar TLS por engano.
+            query["sslmode"] = "require"
+        elif not sslmode and ssl_value in {"true", "1", "require"}:
             query["sslmode"] = "require"
 
         normalized_url = urlunsplit(

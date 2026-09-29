@@ -27,6 +27,12 @@ class Notification(Base):
         nullable=True,
         index=True,
     )
+    ticket_event_id = Column(
+        Integer,
+        ForeignKey("ticket_events.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     type = Column(String(80), nullable=False, index=True)
     title = Column(String(140), nullable=False)
     message = Column(String(280), nullable=False)
@@ -37,3 +43,9 @@ class Notification(Base):
     recipient = relationship("User", foreign_keys=[recipient_id])
     actor = relationship("User", foreign_keys=[actor_id])
     ticket = relationship("Ticket")
+    ticket_event = relationship("TicketEvent")
+    deliveries = relationship(
+        "NotificationDelivery",
+        back_populates="notification",
+        cascade="all, delete-orphan",
+    )

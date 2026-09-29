@@ -17,10 +17,10 @@ if database_url.startswith("sqlite"):
 else:
     engine_options.update(
         {
-            "pool_size": settings.DB_POOL_SIZE,
-            "max_overflow": settings.DB_MAX_OVERFLOW,
-            "pool_timeout": settings.DB_POOL_TIMEOUT_SECONDS,
-            "pool_recycle": settings.DB_POOL_RECYCLE_SECONDS,
+            "pool_size": 5,
+            "max_overflow": 10,
+            "pool_timeout": 30,
+            "pool_recycle": 1800,
         }
     )
 

@@ -4,7 +4,7 @@ import sys
 
 import uvicorn
 
-from app.core.config import settings
+from app.core import security_policy as policy
 from app.main import app
 from app.services.system.bootstrap import create_initial_admin
 from app.services.system.startup_lock import startup_lock
@@ -19,7 +19,7 @@ def run_migrations() -> None:
 
 if __name__ == "__main__":
     with startup_lock():
-        if settings.RUN_MIGRATIONS_ON_STARTUP:
+        if policy.RUN_MIGRATIONS_ON_STARTUP:
             run_migrations()
         create_initial_admin()
 
@@ -27,4 +27,6 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "8000")),
+        access_log=False,
+        log_config=None,
     )

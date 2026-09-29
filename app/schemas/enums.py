@@ -9,6 +9,17 @@ class TicketStatus(str, Enum):
     reopened = "reopened"
 
 
+class UserRole(str, Enum):
+    user = "user"
+    technician = "technician"
+    admin = "admin"
+
+
+class UserOrderBy(str, Enum):
+    name = "name"
+    created_at = "created_at"
+
+
 class TicketPriority(str, Enum):
     low = "low"
     medium = "medium"

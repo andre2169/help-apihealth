@@ -4,18 +4,27 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
-from app.core.dependencies import get_current_user
 from app.core.permissions import require_user, require_technician, require_admin
 
 from app.db.models.ticket import Ticket
 from app.db.models.user import User
 
-from app.schemas.ticket import TicketCreate, TicketResponse, TicketListResponse
+from app.schemas.ticket import (
+    DeletedTicketListResponse,
+    TicketCreate,
+    TicketResponse,
+    TicketListResponse,
+)
 from app.schemas.timeline import TimelineItem
 
 from app.services.tickets import service as ticket_service
 from app.services.tickets.timeline import get_ticket_timeline
 from app.services.tickets.access import can_view_ticket_timeline
+from app.services.tickets.deleted import (
+    get_deleted_ticket_service,
+    get_deleted_ticket_timeline_service,
+    list_deleted_tickets_service,
+)
 from app.schemas.enums import (
     SortDirection,
     TicketImpact,
@@ -145,6 +154,7 @@ def delete_ticket(
 
 @router.get("/", response_model=TicketListResponse)
 def list_tickets(
+    search: str | None = Query(None, min_length=1, max_length=80),
     status: TicketStatus | None = None,
     technician_id: int | None = Query(None, ge=1),
     user_id: int | None = Query(None, ge=1),
@@ -156,12 +166,14 @@ def list_tickets(
     direction: SortDirection = SortDirection.desc,
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
+    include_total: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_user),
 ):
     return ticket_service.list_tickets_service(
         db=db,
         current_user=current_user,
+        search=_clean_optional_filter(search, "Busca", 80),
         status=status.value if status else None,
         technician_id=technician_id,
         user_id=user_id,
@@ -173,7 +185,65 @@ def list_tickets(
         direction=direction.value,
         skip=skip,
         limit=limit,
+        include_total=include_total,
     )
+
+
+@router.get("/deleted", response_model=DeletedTicketListResponse)
+def list_deleted_tickets(
+    search: str | None = Query(None, min_length=1, max_length=80),
+    status: TicketStatus | None = None,
+    priority: TicketPriority | None = None,
+    category: str | None = Query(None, min_length=2, max_length=40),
+    sector: str | None = Query(None, min_length=2, max_length=30),
+    operational_impact: TicketImpact | None = None,
+    direction: SortDirection = SortDirection.desc,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    return list_deleted_tickets_service(
+        db=db,
+        current_user=current_user,
+        search=_clean_optional_filter(search, "Busca", 80),
+        status=status.value if status else None,
+        priority=priority.value if priority else None,
+        category=_clean_optional_filter(category, "Categoria", 40),
+        sector=_clean_optional_filter(sector, "Setor", 30),
+        operational_impact=operational_impact.value if operational_impact else None,
+        direction=direction.value,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/{ticket_id}/deleted", response_model=TicketResponse)
+def get_deleted_ticket(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    try:
+        return get_deleted_ticket_service(
+            db=db, ticket_id=ticket_id, current_user=current_user
+        )
+    except Exception as exc:
+        _http_error(exc)
+
+
+@router.get("/{ticket_id}/deleted/timeline", response_model=List[TimelineItem])
+def deleted_ticket_timeline(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    try:
+        return get_deleted_ticket_timeline_service(
+            db=db, ticket_id=ticket_id, current_user=current_user
+        )
+    except Exception as exc:
+        _http_error(exc)
 
 
 @router.get("/{ticket_id}", response_model=TicketResponse)
@@ -196,9 +266,13 @@ def get_ticket(
 def ticket_timeline(
     ticket_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_user),
 ):
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.deleted_at.is_(None))
+        .first()
+    )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket não encontrado")
 

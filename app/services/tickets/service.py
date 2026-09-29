@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import re
 
 from sqlalchemy.orm import Session, aliased
 from app.db.models.ticket import Ticket
@@ -6,7 +7,7 @@ from app.core.events import create_ticket_event
 from app.db.models.user import User
 from sqlalchemy import case, or_
 import logging
-from app.core.config import settings
+from app.core import security_policy as policy
 from app.core.exceptions import (
     TicketNotFound,
     TicketInvalidStatus,
@@ -15,9 +16,10 @@ from app.core.exceptions import (
 from app.services.audit.events import record_audit_event
 from app.services.notifications.service import (
     delete_notifications_for_ticket,
-    notify_support_users_about_new_ticket,
-    notify_support_users_about_reopened_ticket,
+    create_notifications_for_event,
 )
+from app.services.tickets.access import apply_ticket_visibility, can_view_ticket
+from app.core.search import LIKE_ESCAPE, contains_pattern, normalize_search, page_rows
 
 # loggs do sistema
 logger = logging.getLogger(__name__)
@@ -38,7 +40,11 @@ SEVERITY_RANK = {
 
 
 def _get_ticket_or_fail(db: Session, ticket_id: int) -> Ticket:
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.deleted_at.is_(None))
+        .first()
+    )
     if not ticket:
         raise TicketNotFound()
     return ticket
@@ -47,7 +53,7 @@ def _get_ticket_or_fail(db: Session, ticket_id: int) -> Ticket:
 def get_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> Ticket:
     ticket = _get_ticket_or_fail(db, ticket_id)
 
-    if current_user.role not in ["technician", "admin"] and ticket.user_id != current_user.id:
+    if not can_view_ticket(user=current_user, ticket=ticket):
         raise TicketPermissionDenied("Você não tem permissão para ver este ticket")
 
     return ticket
@@ -96,7 +102,7 @@ def _ensure_ticket_image_quota(*, db: Session, current_user: User, issue_images:
         .count()
     )
 
-    if tickets_with_images >= settings.MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY:
+    if tickets_with_images >= policy.MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY:
         raise TicketInvalidStatus(
             "Limite diário de chamados com imagens atingido. Tente novamente mais tarde ou abra o chamado sem fotos."
         )
@@ -133,11 +139,9 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
     )
 
     db.add(ticket)
-    db.commit()
-    db.refresh(ticket)
     db.flush()
 
-    create_ticket_event(
+    event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
@@ -152,9 +156,10 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
         target_id=ticket.id,
         details={"has_images": bool(issue_images), "priority": priority, "impact": impact},
     )
-    notifications_created = notify_support_users_about_new_ticket(
+    notifications_created = create_notifications_for_event(
         db=db,
         ticket=ticket,
+        event=event,
         actor=current_user,
     )
 
@@ -177,11 +182,14 @@ def assign_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     if ticket.status not in ["open", "reopened"]:
         raise TicketInvalidStatus("Ticket não pode ser assumido")
 
+    if ticket.technician_id is not None and ticket.technician_id != current_user.id:
+        raise TicketPermissionDenied("Este ticket já está atribuído a outro técnico")
+
     ticket.technician_id = current_user.id
     old_status = ticket.status
     ticket.status = "in_progress"
 
-    create_ticket_event(
+    event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
@@ -196,16 +204,23 @@ def assign_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         target_type="ticket",
         target_id=ticket.id,
     )
+    notifications_created = create_notifications_for_event(
+        db=db,
+        ticket=ticket,
+        event=event,
+        actor=current_user,
+    )
 
     db.commit()
     db.refresh(ticket)
 
     logger.info(
-        "Ticket atribuído | ticket_id=%s | technician_id=%s | from_status=%s | to_status=%s",
+        "Ticket atribuído | ticket_id=%s | technician_id=%s | from_status=%s | to_status=%s | notifications=%s",
         ticket.id,
         current_user.id,
         old_status,
         ticket.status,
+        notifications_created,
     )
 
     return ticket
@@ -224,7 +239,7 @@ def resolve_ticket_service(*, db: Session, ticket_id: int, current_user: User) -
     ticket.status = "resolved"
     ticket.resolved_at = datetime.now(timezone.utc)
 
-    create_ticket_event(
+    event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
@@ -239,16 +254,23 @@ def resolve_ticket_service(*, db: Session, ticket_id: int, current_user: User) -
         target_type="ticket",
         target_id=ticket.id,
     )
+    notifications_created = create_notifications_for_event(
+        db=db,
+        ticket=ticket,
+        event=event,
+        actor=current_user,
+    )
 
     db.commit()
     db.refresh(ticket)
 
     logger.info(
-        "Ticket resolvido | ticket_id=%s | technician_id=%s | from_status=%s | to_status=%s",
+        "Ticket resolvido | ticket_id=%s | technician_id=%s | from_status=%s | to_status=%s | notifications=%s",
         ticket.id,
         current_user.id,
         old_status,
         ticket.status,
+        notifications_created,
     )
 
     return ticket
@@ -273,7 +295,7 @@ def close_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> 
     old_status = ticket.status
     ticket.status = "closed"
 
-    create_ticket_event(
+    event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
@@ -288,28 +310,30 @@ def close_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> 
         target_type="ticket",
         target_id=ticket.id,
     )
+    notifications_created = create_notifications_for_event(
+        db=db,
+        ticket=ticket,
+        event=event,
+        actor=current_user,
+    )
 
     db.commit()
     db.refresh(ticket)
 
     logger.info(
-        "Ticket fechado | ticket_id=%s | user_id=%s | from_status=%s | to_status=%s",
+        "Ticket fechado | ticket_id=%s | user_id=%s | from_status=%s | to_status=%s | notifications=%s",
         ticket.id,
         current_user.id,
         old_status,
         ticket.status,
+        notifications_created,
     )
 
     return ticket
 
 
 def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> None:
-    """
-    Remove um chamado do sistema.
-
-    A rota que chama este serviço é protegida para administradores. Mantemos o
-    usuário no log para auditoria operacional sem expor dados sensíveis.
-    """
+    """Marca um chamado como excluído sem remover seus dados do banco."""
     ticket = _get_ticket_or_fail(db, ticket_id)
 
     logger.warning(
@@ -319,13 +343,15 @@ def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     )
 
     delete_notifications_for_ticket(db=db, ticket_id=ticket.id)
-    db.delete(ticket)
+    ticket.deleted_at = datetime.now(timezone.utc)
+    ticket.deleted_by_id = current_user.id
     record_audit_event(
         db,
         actor_id=current_user.id,
         action="ticket.deleted",
         target_type="ticket",
         target_id=ticket_id,
+        details={"deletion_mode": "soft"},
     )
     db.commit()
 
@@ -367,7 +393,7 @@ def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     ticket.sla_hours = _sla_hours_for(ticket.operational_impact, ticket.priority)
     ticket.due_at = _due_at(ticket.sla_hours)
 
-    create_ticket_event(
+    event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
@@ -382,9 +408,10 @@ def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
         target_type="ticket",
         target_id=ticket.id,
     )
-    notifications_created = notify_support_users_about_reopened_ticket(
+    notifications_created = create_notifications_for_event(
         db=db,
         ticket=ticket,
+        event=event,
         actor=current_user,
     )
 
@@ -407,6 +434,7 @@ def list_tickets_service(
     *,
     db: Session,
     current_user: User,
+    search: str | None = None,
     status: str | None = None,
     technician_id: int | None = None,
     user_id: int | None = None,
@@ -418,13 +446,15 @@ def list_tickets_service(
     direction: str = "desc",
     skip: int = 0,
     limit: int = 10,
+    include_total: bool = False,
 ):
-    query = db.query(Ticket)
+    query = apply_ticket_visibility(db.query(Ticket), current_user)
 
     logger.info(
-        "Listagem de tickets solicitada | current_user_id=%s | role=%s | status=%s | technician_id=%s | user_id=%s | priority=%s | category_set=%s | sector_set=%s | impact=%s | order_by=%s | direction=%s | skip=%s | limit=%s",
+        "Listagem de tickets solicitada | current_user_id=%s | role=%s | search_set=%s | status=%s | technician_id=%s | user_id=%s | priority=%s | category_set=%s | sector_set=%s | impact=%s | order_by=%s | direction=%s | skip=%s | limit=%s",
         current_user.id,
         current_user.role,
+        bool(search),
         status,
         technician_id,
         user_id,
@@ -438,7 +468,7 @@ def list_tickets_service(
         limit,
     )
 
-    if current_user.role not in ["technician", "admin"]:
+    if current_user.role == "user":
         if user_id is not None and user_id != current_user.id:
             logger.warning(
                 "Filtro por user_id negado | current_user_id=%s | requested_user_id=%s",
@@ -451,9 +481,8 @@ def list_tickets_service(
             )
 
         query = query.filter(Ticket.user_id == current_user.id)
-    else:
-        if user_id is not None:
-            query = query.filter(Ticket.user_id == user_id)
+    elif user_id is not None:
+        query = query.filter(Ticket.user_id == user_id)
 
     if status:
         query = query.filter(Ticket.status == status)
@@ -472,6 +501,21 @@ def list_tickets_service(
 
     if operational_impact:
         query = query.filter(Ticket.operational_impact == operational_impact)
+
+    if search:
+        # O codigo publico e derivado do ID do chamado (por exemplo, CH-00016).
+        # Numeros digitados pelo usuario procuram o ID exato, enquanto textos
+        # procuram titulo e descricao. O escopo de visibilidade ja foi aplicado
+        # acima, antes desta expressao de busca.
+        search_term = normalize_search(search)
+        code_match = re.fullmatch(r"(?i)(?:ch[-\s]*)?0*(\d+)", search_term)
+        search_filters = [
+            Ticket.title.ilike(contains_pattern(search_term), escape=LIKE_ESCAPE),
+            Ticket.description.ilike(contains_pattern(search_term), escape=LIKE_ESCAPE),
+        ]
+        if code_match and len(code_match.group(1)) <= 18:
+            search_filters.insert(0, Ticket.id == int(code_match.group(1)))
+        query = query.filter(or_(*search_filters))
 
     allowed_order_fields = {
         "id": Ticket.id,
@@ -512,12 +556,10 @@ def list_tickets_service(
     else:
         query = query.order_by(order_column.desc(), Ticket.id.desc())
 
-    total = query.count()
-
     owner_alias = aliased(User)
     technician_alias = aliased(User)
 
-    rows = (
+    rows_query = (
         query.with_entities(
             Ticket.id,
             Ticket.title,
@@ -535,10 +577,9 @@ def list_tickets_service(
         )
         .outerjoin(owner_alias, owner_alias.id == Ticket.user_id)
         .outerjoin(technician_alias, technician_alias.id == Ticket.technician_id)
-        .offset(skip)
-        .limit(limit)
-        .all()
     )
+    total = rows_query.count() if include_total else None
+    rows, has_more = page_rows(rows_query, skip=skip, limit=limit)
 
     tickets = [
         {
@@ -560,15 +601,16 @@ def list_tickets_service(
     ]
 
     logger.info(
-        "Listagem de tickets concluída | current_user_id=%s | total=%s | returned=%s",
+        "Listagem de tickets concluída | current_user_id=%s | returned=%s | has_more=%s",
         current_user.id,
-        total,
         len(tickets),
+        has_more,
     )
 
     return {
         "items": tickets,
         "total": total,
-        "skip": skip,
+        "skip": max(skip, 0),
         "limit": limit,
+        "has_more": has_more,
     }

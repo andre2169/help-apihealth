@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.core.auth import decode_access_token
-from app.core.config import settings
+from app.core import security_policy as policy
 from app.deps import get_db
 from app.db.models.user import User
 from app.services.auth.tokens import is_token_revoked
@@ -17,7 +17,7 @@ def extract_auth_token(
 ) -> str | None:
     if credentials and credentials.credentials:
         return credentials.credentials
-    return request.cookies.get(settings.AUTH_COOKIE_NAME)
+    return request.cookies.get(policy.AUTH_COOKIE_NAME)
 
 def get_current_user(
     request: Request,
@@ -62,7 +62,7 @@ def get_current_user(
         )
 
     user = db.query(User).filter(User.id == user_id_int).first()
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
@@ -80,3 +80,14 @@ def get_current_user(
         )
 
     return user
+
+
+def require_verified_user(
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirme seu email antes de acessar esta área.",
+        )
+    return current_user

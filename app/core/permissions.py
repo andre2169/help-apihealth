@@ -1,16 +1,16 @@
 from fastapi import Depends, HTTPException, status
-from app.core.dependencies import get_current_user
+from app.core.dependencies import require_verified_user
 from app.db.models.user import User
 
 
 def require_user(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_verified_user)
 ):
     return current_user
 
 
 def require_technician(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_verified_user)
 ):
     if current_user.role not in ["technician", "admin"]:
         raise HTTPException(
@@ -21,7 +21,7 @@ def require_technician(
 
 
 def require_admin(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_verified_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(

@@ -23,6 +23,16 @@ class Ticket(Base):
     due_at = Column(DateTime(timezone=True), nullable=True, index=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
+    # Exclusão lógica: preserva o chamado e seu histórico para recuperação
+    # administrativa sem deixá-lo aparecer nas consultas operacionais.
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # open | in_progress | resolved | closed | reopened
     status = Column(String(20), nullable=False, default="open", index=True)
 
@@ -48,6 +58,11 @@ class Ticket(Base):
         back_populates="assigned_tickets"
     )
 
+    deleted_by_user = relationship(
+        "User",
+        foreign_keys=[deleted_by_id],
+    )
+
     # Comentários do ticket
     comments = relationship(
         "Comment",
@@ -69,3 +84,7 @@ class Ticket(Base):
     @property
     def technician_name(self):
         return self.technician.name if self.technician else None
+
+    @property
+    def deleted_by_name(self):
+        return self.deleted_by_user.name if self.deleted_by_user else None

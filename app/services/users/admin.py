@@ -1,3 +1,4 @@
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.models.audit_event import AuditEvent
@@ -17,6 +18,7 @@ from app.services.notifications.service import (
     delete_notifications_for_tickets,
     remove_user_from_notifications,
 )
+from app.core.search import LIKE_ESCAPE, normalize_search, page_rows, prefix_pattern
 
 
 VALID_ROLES = ["user", "technician", "admin"]
@@ -24,6 +26,14 @@ VALID_ROLES = ["user", "technician", "admin"]
 
 def _admin_count(db: Session) -> int:
     return db.query(User.id).filter(User.role == "admin").count()
+
+
+def _active_admin_count(db: Session) -> int:
+    return (
+        db.query(User.id)
+        .filter(User.role == "admin", User.is_active.is_(True))
+        .count()
+    )
 
 
 def _ensure_role_change_is_safe(
@@ -47,15 +57,53 @@ def _ensure_role_change_is_safe(
         )
 
 
-def list_users_service(*, db: Session):
-    users = db.query(User).order_by(User.created_at.desc(), User.id.desc()).all()
-    return [
+def list_users_service(
+    *,
+    db: Session,
+    search: str | None = None,
+    role: str | None = None,
+    is_active: bool | None = None,
+    order_by: str = "name",
+    direction: str = "asc",
+    skip: int = 0,
+    limit: int = 20,
+):
+    query = db.query(User)
+
+    clean_search = normalize_search(search)
+    if clean_search:
+        # lower(name) permite usar o indice de busca case-insensitive no
+        # PostgreSQL. Os curingas digitados pelo usuario sao tratados como
+        # texto literal, nao como uma consulta aberta.
+        query = query.filter(
+            func.lower(User.name).like(
+                prefix_pattern(clean_search).lower(),
+                escape=LIKE_ESCAPE,
+            )
+        )
+
+    if role:
+        query = query.filter(User.role == role)
+
+    if is_active is not None:
+        query = query.filter(User.is_active.is_(is_active))
+
+    order_column = User.created_at if order_by == "created_at" else User.name
+    if direction == "desc":
+        users_query = query.order_by(order_column.desc(), User.id.desc())
+    else:
+        users_query = query.order_by(order_column.asc(), User.id.asc())
+
+    users, has_more = page_rows(users_query, skip=skip, limit=limit)
+
+    items = [
         {
             "id": user.id,
             "name": user.name,
             "email_masked": mask_email(user.email),
             "role": user.role,
             "email_verified": bool(user.email_verified),
+            "is_active": bool(user.is_active),
             "job_title": user.job_title,
             "department": user.department,
             "unit_name": user.unit_name,
@@ -63,6 +111,14 @@ def list_users_service(*, db: Session):
         }
         for user in users
     ]
+
+    return {
+        "items": items,
+        "total": None,
+        "skip": max(skip, 0),
+        "limit": limit,
+        "has_more": has_more,
+    }
 
 
 def get_user_service(*, db: Session, user_id: int) -> User:
@@ -120,11 +176,25 @@ def update_user_service(
     department: str | None,
     unit_name: str | None,
     notification_preference: str | None,
+    is_active: bool | None,
     actor: User,
     ip_address: str | None = None,
 ) -> User:
     user = get_user_service(db=db, user_id=user_id)
     changed_fields: list[str] = []
+
+    if is_active is False and user.id == actor.id:
+        raise TicketPermissionDenied("Admin não pode desativar a própria conta")
+
+    if (
+        is_active is False
+        and user.role == "admin"
+        and user.is_active
+        and _active_admin_count(db) <= 1
+    ):
+        raise TicketPermissionDenied(
+            "Não é possível desativar o último administrador ativo"
+        )
 
     if name is not None:
         user.name = name
@@ -150,6 +220,10 @@ def update_user_service(
     if notification_preference is not None:
         user.notification_preference = notification_preference
         changed_fields.append("notification_preference")
+    if is_active is not None and user.is_active != is_active:
+        user.is_active = is_active
+        user.session_version = (user.session_version or 1) + 1
+        changed_fields.append("is_active")
 
     if changed_fields:
         record_audit_event(

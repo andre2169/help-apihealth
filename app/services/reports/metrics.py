@@ -1,18 +1,16 @@
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.ticket import Ticket
 from app.db.models.ticket_event import TicketEvent
 from app.db.models.user import User
+from app.services.tickets.access import apply_ticket_personal_scope
 
 
 def _visible_tickets_query(db: Session, current_user: User):
-    query = db.query(Ticket)
-    if current_user.role == "user":
-        query = query.filter(Ticket.user_id == current_user.id)
-    return query
+    return apply_ticket_personal_scope(db.query(Ticket), current_user)
 
 
 def _counts_by(query, column):
@@ -98,64 +96,71 @@ def _apply_report_filters(
     return query
 
 
-def _naive_utc(value):
-    if not value:
-        return None
-    if value.tzinfo:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
-
-
 def _sla_metrics(query):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     soon = now + timedelta(hours=4)
     active_statuses = ["open", "reopened", "in_progress"]
 
-    overdue_count = (
-        query.filter(
-            Ticket.status.in_(active_statuses),
-            Ticket.due_at.isnot(None),
-            Ticket.due_at < now,
-        )
-        .count()
+    resolved_condition = and_(
+        Ticket.created_at.isnot(None),
+        Ticket.resolved_at.isnot(None),
     )
-    due_soon_count = (
-        query.filter(
-            Ticket.status.in_(active_statuses),
-            Ticket.due_at.isnot(None),
-            Ticket.due_at >= now,
-            Ticket.due_at <= soon,
-        )
-        .count()
+    within_sla_condition = and_(
+        resolved_condition,
+        Ticket.due_at.isnot(None),
+        Ticket.resolved_at <= Ticket.due_at,
     )
+    active_condition = Ticket.status.in_(active_statuses)
 
-    resolved_tickets = query.filter(Ticket.resolved_at.isnot(None)).all()
-    resolution_minutes = []
-    within_sla = 0
+    # O banco calcula a duracao sem transferir todas as datas para Python.
+    # PostgreSQL e SQLite usam funcoes diferentes para diferenca de datas.
+    dialect_name = query.session.get_bind().dialect.name
+    if dialect_name == "postgresql":
+        elapsed_minutes = func.extract(
+            "epoch", Ticket.resolved_at - Ticket.created_at
+        ) / 60
+    else:
+        elapsed_minutes = (
+            func.julianday(Ticket.resolved_at) - func.julianday(Ticket.created_at)
+        ) * 1440
 
-    for ticket in resolved_tickets:
-        created_at = _naive_utc(ticket.created_at)
-        resolved_at = _naive_utc(ticket.resolved_at)
-        due_at = _naive_utc(ticket.due_at)
-        if created_at and resolved_at:
-            resolution_minutes.append(
-                max(0, int((resolved_at - created_at).total_seconds() // 60))
+    row = query.with_entities(
+        func.sum(
+            case(
+                (and_(active_condition, Ticket.due_at.isnot(None), Ticket.due_at < now), 1),
+                else_=0,
             )
-        if due_at and resolved_at and resolved_at <= due_at:
-            within_sla += 1
-
-    avg_resolution_minutes = (
-        int(sum(resolution_minutes) / len(resolution_minutes))
-        if resolution_minutes
-        else 0
-    )
+        ).label("overdue"),
+        func.sum(
+            case(
+                (
+                    and_(
+                        active_condition,
+                        Ticket.due_at.isnot(None),
+                        Ticket.due_at >= now,
+                        Ticket.due_at <= soon,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+        ).label("due_soon"),
+        func.sum(case((resolved_condition, 1), else_=0)).label("resolved_total"),
+        func.sum(case((within_sla_condition, 1), else_=0)).label("within_sla"),
+        func.avg(
+            case(
+                (resolved_condition, case((elapsed_minutes > 0, elapsed_minutes), else_=0)),
+                else_=None,
+            )
+        ).label("avg_resolution_minutes"),
+    ).one()
 
     return {
-        "overdue": overdue_count,
-        "due_soon": due_soon_count,
-        "resolved_total": len(resolved_tickets),
-        "within_sla": within_sla,
-        "avg_resolution_minutes": avg_resolution_minutes,
+        "overdue": int(row.overdue or 0),
+        "due_soon": int(row.due_soon or 0),
+        "resolved_total": int(row.resolved_total or 0),
+        "within_sla": int(row.within_sla or 0),
+        "avg_resolution_minutes": int(row.avg_resolution_minutes or 0),
     }
 
 
@@ -185,28 +190,25 @@ def _requester_counts(query):
 
 def _active_age_counts(query):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    buckets = {
-        "Até 24h": 0,
-        "1 a 3 dias": 0,
-        "4 a 7 dias": 0,
-        "Mais de 7 dias": 0,
-    }
+    buckets = {"Até 24h": 0, "1 a 3 dias": 0, "4 a 7 dias": 0, "Mais de 7 dias": 0}
+    day_bucket = case(
+        (Ticket.created_at >= now - timedelta(hours=24), "Até 24h"),
+        (Ticket.created_at >= now - timedelta(hours=72), "1 a 3 dias"),
+        (Ticket.created_at >= now - timedelta(hours=168), "4 a 7 dias"),
+        else_="Mais de 7 dias",
+    )
 
-    tickets = query.filter(Ticket.status.in_(["open", "reopened", "in_progress"])).all()
-    for ticket in tickets:
-        created_at = _naive_utc(ticket.created_at)
-        if not created_at:
-            continue
-
-        age_hours = max(0, (now - created_at).total_seconds() / 3600)
-        if age_hours <= 24:
-            buckets["Até 24h"] += 1
-        elif age_hours <= 72:
-            buckets["1 a 3 dias"] += 1
-        elif age_hours <= 168:
-            buckets["4 a 7 dias"] += 1
-        else:
-            buckets["Mais de 7 dias"] += 1
+    rows = (
+        query.filter(
+            Ticket.status.in_(["open", "reopened", "in_progress"]),
+            Ticket.created_at.isnot(None),
+        )
+        .with_entities(day_bucket.label("bucket"), func.count(Ticket.id))
+        .group_by(day_bucket)
+        .all()
+    )
+    for bucket, total in rows:
+        buckets[str(bucket)] = int(total or 0)
 
     return buckets
 
@@ -214,14 +216,18 @@ def _active_age_counts(query):
 def _queue_snapshot(query):
     active_statuses = ["open", "reopened", "in_progress"]
     active_query = query.filter(Ticket.status.in_(active_statuses))
+    row = active_query.with_entities(
+        func.count(Ticket.id).label("active_total"),
+        func.sum(case((Ticket.technician_id.is_(None), 1), else_=0)).label("unassigned"),
+        func.sum(case((Ticket.operational_impact == "critical", 1), else_=0)).label("critical"),
+        func.sum(case((Ticket.priority.in_(["high", "critical"]), 1), else_=0)).label("high_priority"),
+    ).one()
 
     return {
-        "Ativos": active_query.count(),
-        "Sem técnico": active_query.filter(Ticket.technician_id.is_(None)).count(),
-        "Críticos ativos": active_query.filter(Ticket.operational_impact == "critical").count(),
-        "Alta prioridade ativa": active_query.filter(
-            Ticket.priority.in_(["high", "critical"])
-        ).count(),
+        "Ativos": int(row.active_total or 0),
+        "Sem técnico": int(row.unassigned or 0),
+        "Críticos ativos": int(row.critical or 0),
+        "Alta prioridade ativa": int(row.high_priority or 0),
     }
 
 
@@ -273,12 +279,12 @@ def _report_summary_metrics(*, status_counts: dict, sla: dict, queue_snapshot: d
 def dashboard_summary_service(*, db: Session, current_user: User):
     query = _visible_tickets_query(db, current_user)
 
-    total = query.count()
     by_status = _counts_by(query, Ticket.status)
     by_priority = _counts_by(query, Ticket.priority)
     by_category = _counts_by(query, Ticket.category)
     by_sector = _counts_by(query, Ticket.sector)
     by_operational_impact = _counts_by(query, Ticket.operational_impact)
+    total = sum(int(value or 0) for value in by_status.values())
     sla = _sla_metrics(query)
 
     recent_tickets = _ticket_summary_rows(
@@ -292,7 +298,10 @@ def dashboard_summary_service(*, db: Session, current_user: User):
     if current_user.role in ["technician", "admin"]:
         technician_queue = _ticket_summary_rows(
             db.query(Ticket)
-            .filter(Ticket.status.in_(["open", "reopened"]))
+            .filter(
+                Ticket.status.in_(["open", "reopened"]),
+                Ticket.technician_id.is_(None),
+            )
             .order_by(Ticket.created_at.asc(), Ticket.id.asc())
             .limit(8)
         )
@@ -371,20 +380,25 @@ def reports_overview_service(
             Ticket.status.label("ticket_status"),
             Ticket.technician_id.label("technician_id"),
         ).subquery()
+        technician_query = db.query(
+            User.id,
+            User.name,
+            func.count(filtered_tickets.c.ticket_id).label("assigned_total"),
+            func.sum(
+                case((filtered_tickets.c.ticket_status == "resolved", 1), else_=0)
+            ).label("resolved_total"),
+            func.sum(
+                case((filtered_tickets.c.ticket_status == "closed", 1), else_=0)
+            ).label("closed_total"),
+        ).outerjoin(filtered_tickets, filtered_tickets.c.technician_id == User.id)
+
+        if current_user.role == "admin":
+            technician_query = technician_query.filter(User.role.in_(["technician", "admin"]))
+        else:
+            technician_query = technician_query.filter(User.id == current_user.id)
+
         technician_rows = (
-            db.query(
-                User.id,
-                User.name,
-                func.count(filtered_tickets.c.ticket_id).label("assigned_total"),
-                func.sum(
-                    case((filtered_tickets.c.ticket_status == "resolved", 1), else_=0)
-                ).label("resolved_total"),
-                func.sum(
-                    case((filtered_tickets.c.ticket_status == "closed", 1), else_=0)
-                ).label("closed_total"),
-            )
-            .outerjoin(filtered_tickets, filtered_tickets.c.technician_id == User.id)
-            .filter(User.role.in_(["technician", "admin"]))
+            technician_query
             .group_by(User.id, User.name)
             .order_by(User.name.asc())
             .all()

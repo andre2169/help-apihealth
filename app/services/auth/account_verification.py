@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core import security_policy as policy
 from app.core.config import settings
 from app.db.models.account_verification import AccountVerification
 from app.db.models.user import User
@@ -19,6 +20,7 @@ PURPOSE_PASSWORD_CHANGE = "password_change"
 PURPOSE_EMAIL_CHANGE = "email_change"
 PURPOSE_PASSWORD_RECOVERY = "password_recovery"
 PURPOSE_EMAIL_VERIFICATION = "email_verification"
+PURPOSE_LOGIN_MFA = "login_mfa"
 MAX_VERIFICATION_ATTEMPTS = 5
 
 
@@ -88,6 +90,9 @@ def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]
     elif purpose == PURPOSE_PASSWORD_RECOVERY:
         subject = "Recupere sua senha - HelpWeb Health"
         action = "recuperar o acesso à sua conta"
+    elif purpose == PURPOSE_LOGIN_MFA:
+        subject = "Confirme seu acesso - HelpWeb Health"
+        action = "confirmar seu acesso ao HelpWeb Health"
     else:
         subject = "Confirme a alteração de senha - HelpWeb Health"
         action = "alterar a senha da sua conta"
@@ -95,7 +100,7 @@ def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]
     body = (
         f"Olá, {user.name}.\n\n"
         f"Seu código para {action} é: {code}\n\n"
-        f"Esse código expira em {settings.EMAIL_CODE_EXPIRE_MINUTES} minutos. "
+        f"Esse código expira em {policy.EMAIL_CODE_EXPIRE_MINUTES} minutos. "
         "Se você não solicitou essa alteração, ignore esta mensagem e avise o suporte.\n\n"
         "HelpWeb Health"
     )
@@ -119,7 +124,7 @@ def create_account_verification(
     """
     normalized_target = _normalize_target(target_value)
     now = _now()
-    cooldown = max(0, settings.VERIFICATION_RESEND_COOLDOWN_SECONDS)
+    cooldown = max(0, policy.VERIFICATION_RESEND_COOLDOWN_SECONDS)
 
     active_code = (
         db.query(AccountVerification)
@@ -129,6 +134,7 @@ def create_account_verification(
             AccountVerification.used_at.is_(None),
         )
         .order_by(AccountVerification.created_at.desc())
+        .with_for_update()
         .first()
     )
 
@@ -157,11 +163,19 @@ def create_account_verification(
         purpose=purpose,
         target_value=normalized_target,
         code_hash=_hash_code(code),
-        expires_at=now + timedelta(minutes=settings.EMAIL_CODE_EXPIRE_MINUTES),
+        expires_at=now + timedelta(minutes=policy.EMAIL_CODE_EXPIRE_MINUTES),
     )
 
     db.add(verification)
     db.commit()
+
+    if purpose == PURPOSE_LOGIN_MFA and settings.local_login_mfa_code_logging:
+        logger.warning(
+            "Codigo MFA de login para teste local | user_id=%s | code=%s",
+            user.id,
+            code,
+        )
+        return False
 
     subject, body = _message_for_code(user=user, code=code, purpose=purpose)
     try:
@@ -174,7 +188,7 @@ def create_account_verification(
         logger.exception("Falha ao enviar codigo de verificacao por email")
         email_sent = False
 
-    if not email_sent and settings.ALLOW_LOG_VERIFICATION_CODES:
+    if not email_sent and policy.ALLOW_LOG_VERIFICATION_CODES:
         logger.warning(
             "Codigo de verificacao gerado em modo local | user_id=%s | purpose=%s | code=%s",
             user.id,

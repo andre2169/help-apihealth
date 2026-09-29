@@ -1,4 +1,5 @@
 from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
 
 pwd_context = CryptContext(
     schemes=["bcrypt"],
@@ -19,4 +20,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(_bcrypt_secret(plain_password), hashed_password)
+    try:
+        return pwd_context.verify(_bcrypt_secret(plain_password), hashed_password)
+    except (UnknownHashError, ValueError):
+        # Um hash corrompido nao deve transformar o login em erro 500.
+        return False

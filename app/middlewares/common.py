@@ -1,10 +1,11 @@
 import logging
+import re
 from uuid import uuid4
 
 from fastapi import Request
 
 from app.core.auth import decode_access_token
-from app.core.config import settings
+from app.core import security_policy as policy
 
 JSON_ERROR_HEADERS = {
     "Cache-Control": "no-store",
@@ -14,7 +15,7 @@ JSON_ERROR_HEADERS = {
 
 def request_id(request: Request) -> str:
     incoming = request.headers.get("x-request-id")
-    if incoming and len(incoming) <= 80:
+    if incoming and re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", incoming):
         return incoming
     return uuid4().hex
 
@@ -24,7 +25,7 @@ def token_identity(request: Request) -> str:
     if authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
     else:
-        token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+        token = request.cookies.get(policy.AUTH_COOKIE_NAME)
 
     if not token:
         return "anon"
@@ -50,6 +51,10 @@ def status_result(status_code: int) -> str:
         return "forbidden"
     if status_code == 404:
         return "not_found"
+    if status_code == 408:
+        return "request_timeout"
+    if status_code == 409:
+        return "conflict"
     if status_code == 413:
         return "payload_too_large"
     if status_code == 414:
@@ -60,6 +65,8 @@ def status_result(status_code: int) -> str:
         return "validation_error"
     if status_code == 429:
         return "rate_limited"
+    if status_code == 431:
+        return "headers_too_large"
     if status_code == 503:
         return "server_busy"
     if 400 <= status_code < 500:
@@ -67,6 +74,106 @@ def status_result(status_code: int) -> str:
     if status_code >= 500:
         return "server_error"
     return "other"
+
+
+HTTP_STATUS_LABELS = {
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    204: "No Content",
+    301: "Moved Permanently",
+    302: "Found",
+    304: "Not Modified",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    408: "Request Timeout",
+    409: "Conflict",
+    413: "Payload Too Large",
+    414: "URI Too Long",
+    415: "Unsupported Media Type",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    431: "Request Header Fields Too Large",
+    500: "Internal Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+}
+
+
+def http_status_label(status_code: int) -> str:
+    """Retorna uma descricao segura para leitura humana dos logs."""
+    return HTTP_STATUS_LABELS.get(status_code, "HTTP Status")
+
+
+def status_reason(status_code: int) -> str:
+    """Resume o significado operacional do status sem registrar a entrada."""
+    reasons = {
+        201: "resource_created",
+        204: "operation_completed_without_body",
+        400: "invalid_request_or_business_rule",
+        401: "authentication_required_or_invalid_credentials",
+        403: "authorization_denied",
+        404: "resource_not_found",
+        408: "request_timeout",
+        409: "resource_conflict",
+        413: "request_body_too_large",
+        414: "request_url_too_long",
+        415: "unsupported_content_type",
+        422: "input_validation_failed",
+        429: "rate_limit_exceeded",
+        431: "request_headers_too_large",
+        500: "unexpected_server_error",
+        502: "upstream_service_error",
+        503: "service_unavailable",
+        504: "upstream_timeout",
+    }
+    if status_code in reasons:
+        return reasons[status_code]
+    if 200 <= status_code < 300:
+        return "request_completed"
+    if 300 <= status_code < 400:
+        return "redirected"
+    if 400 <= status_code < 500:
+        return "client_error"
+    if status_code >= 500:
+        return "server_error"
+    return "unknown_status"
+
+
+def error_category(exc: Exception) -> str:
+    """Classifica falhas sem registrar a mensagem ou os dados da entrada."""
+    error_type = exc.__class__.__name__
+    if error_type == "ResponseValidationError":
+        return "response_validation"
+    if error_type in {"ValidationError", "RequestValidationError"}:
+        return "request_validation"
+    if error_type in {"IntegrityError", "OperationalError", "DBAPIError"}:
+        return "database"
+    if "Timeout" in error_type:
+        return "dependency_timeout"
+    if error_type in {"ConnectionError", "ConnectError"}:
+        return "dependency_connection"
+    return "unexpected"
+
+
+def safe_error_reason(exc: Exception) -> str:
+    """Converte excecoes conhecidas em codigos sem PII ou texto do usuario."""
+    reason_by_type = {
+        "TicketNotFound": "ticket_not_found",
+        "TicketInvalidStatus": "invalid_ticket_status",
+        "TicketPermissionDenied": "ticket_permission_denied",
+        "InvalidCredentials": "invalid_credentials",
+        "UserNotFound": "user_not_found",
+        "InvalidUserRole": "invalid_user_role",
+        "UserAlreadyExists": "user_already_exists",
+        "ResponseValidationError": "response_validation_failed",
+        "RequestValidationError": "request_validation_failed",
+    }
+    return reason_by_type.get(exc.__class__.__name__, error_category(exc))
 
 
 def request_action(method: str, path: str) -> str:
@@ -137,6 +244,10 @@ def request_action(method: str, path: str) -> str:
     if resource == "admin":
         if remainder == ["network-debug"]:
             return "admin.network_debug"
+        if remainder == ["notification-events"]:
+            return "admin.notification_events"
+        if remainder == ["ticket-events"]:
+            return "admin.ticket_events"
         if remainder and remainder[0] == "users":
             if method == "GET" and len(remainder) == 1:
                 return "admin.user.list"

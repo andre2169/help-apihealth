@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 
@@ -26,5 +26,4 @@ class TimelineItem(BaseModel):
 
     author: TimelineAuthor
 
-    class Config:
-        exclude_none = True
+    model_config = ConfigDict(exclude_none=True)

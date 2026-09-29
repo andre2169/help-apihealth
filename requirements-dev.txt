@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8,<10
+# Versoes antigas de httpx2/httpcore2 possuem avisos de seguranca conhecidos.
+httpx2>=2.12,<3
+pip-audit>=2.9,<3

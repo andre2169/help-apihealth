@@ -9,7 +9,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
+    name = Column(String(100), nullable=False, index=True)
     email = Column(String(100), unique=True, index=True, nullable=False)
 
     # Dados de contato e contexto institucional do usuário.
@@ -18,6 +18,8 @@ class User(Base):
     department = Column(String(100), nullable=True)
     unit_name = Column(String(100), nullable=True)
     notification_preference = Column(String(20), nullable=False, default="email")
+    # Conta desativada não recebe novas notificações nem pode autenticar.
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
 
     # Segurança
     password_hash = Column(String, nullable=False)

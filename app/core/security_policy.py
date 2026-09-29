@@ -1,0 +1,119 @@
+"""Politicas de seguranca e operacao controladas pelo codigo.
+
+Valores nesta unidade nao sao segredos nem configuracoes especificas de uma
+plataforma. Eles representam limites deliberados da aplicacao e devem mudar
+por revisao de codigo, com testes, em vez de depender de dezenas de variaveis
+de ambiente.
+"""
+
+# Sessao e tokens
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+JWT_ISSUER = "helpweb-health-api"
+JWT_AUDIENCE = "helpweb-health-web"
+AUTH_COOKIE_NAME = "helpwebhealth_session"
+CSRF_COOKIE_NAME = "helpwebhealth_csrf"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+
+# Superficie publica: documentacao e diagnosticos ficam desligados no codigo.
+ENABLE_API_DOCS = False
+ENABLE_DB_HEALTH_ENDPOINT = False
+ENABLE_NETWORK_DEBUG_ENDPOINT = False
+API_DOCS_USERNAME = "admin"
+API_DOCS_PASSWORD = None
+
+# Logs: o formato legivel e adequado ao terminal da hospedagem.
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "text"
+ALLOW_LOG_VERIFICATION_CODES = False
+LOG_INCLUDE_STACKTRACE = False
+
+# Email e recuperacao de conta.
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USE_TLS = True
+SMTP_USE_SSL = False
+SMTP_TIMEOUT_SECONDS = 30
+MAIL_FROM_NAME = "HelpWeb Health"
+EMAIL_CODE_EXPIRE_MINUTES = 15
+VERIFICATION_RESEND_COOLDOWN_SECONDS = 300
+ACCOUNT_RECOVERY_MIN_RESPONSE_SECONDS = 1.2
+ACCOUNT_RECOVERY_WINDOW_SECONDS = 900
+ACCOUNT_RECOVERY_MAX_REQUESTS_PER_EMAIL = 5
+ACCOUNT_RECOVERY_MAX_REQUESTS_PER_IP = 20
+
+# Rate limit por escopo. A instancia local usa Token Bucket; quando Redis for
+# habilitado, a contagem podera ser compartilhada entre processos.
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 240
+RATE_LIMIT_SENSITIVE_MAX_REQUESTS = 40
+RATE_LIMIT_PUBLIC_MAX_REQUESTS = 120
+RATE_LIMIT_POLLING_MAX_REQUESTS = 80
+RATE_LIMIT_AUTH_MAX_REQUESTS = 40
+RATE_LIMIT_RECOVERY_MAX_REQUESTS = 20
+RATE_LIMIT_REGISTRATION_MAX_REQUESTS = 10
+RATE_LIMIT_DASHBOARD_MAX_REQUESTS = 30
+RATE_LIMIT_REPORT_MAX_REQUESTS = 20
+RATE_LIMIT_REPORT_PDF_MAX_REQUESTS = 5
+RATE_LIMIT_TICKET_READ_MAX_REQUESTS = 120
+RATE_LIMIT_TICKET_WRITE_MAX_REQUESTS = 40
+RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS = 60
+RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS = 60
+RATE_LIMIT_ADMIN_READ_MAX_REQUESTS = 30
+RATE_LIMIT_ADMIN_WRITE_MAX_REQUESTS = 20
+RATE_LIMIT_WEBHOOK_MAX_REQUESTS = 120
+
+# Protecao progressiva de login. O bloqueio e intencionalmente curto para
+# evitar prender um usuario legitimo por minutos apos um erro de digitacao.
+LOGIN_FAILURE_THRESHOLD = 5
+LOGIN_MFA_ROLES = frozenset({"admin", "technician"})
+LOGIN_MFA_VERIFY_MAX_REQUESTS = 10
+LOGIN_MFA_VERIFY_WINDOW_SECONDS = 900
+LOGIN_LOCK_DURATIONS_SECONDS = (
+    5,       # 5 falhas
+    10,      # 10 falhas
+    15,      # 15 falhas
+    20,      # 20 falhas
+    60,      # 25 falhas
+    300,     # 30 falhas
+    1800,    # 35 falhas
+    7200,    # 40 falhas
+    21600,   # 45 ou mais: 6 horas
+)
+LOGIN_FAILURE_WINDOW_SECONDS = 86400
+
+# Redis e limites locais. REDIS_URL continua sendo configuravel porque e uma
+# credencial/endpoint de infraestrutura; os nomes e timeouts nao precisam ser.
+REDIS_RATE_LIMIT_PREFIX = "helpwebhealth:rate"
+REDIS_CONNECT_TIMEOUT_SECONDS = 1.0
+REDIS_OPERATION_TIMEOUT_SECONDS = 1.0
+REDIS_NOTIFICATION_STREAM = "helpwebhealth:notifications:whatsapp"
+REDIS_NOTIFICATION_GROUP = "helpwebhealth-whatsapp-workers"
+REDIS_NOTIFICATION_CONSUMER = "worker-1"
+
+# Protecoes de recursos HTTP.
+MAX_CONCURRENT_REQUESTS = 80
+CONCURRENCY_WAIT_TIMEOUT_SECONDS = 0.25
+MAX_REQUEST_BODY_BYTES = 6_000_000
+MAX_REQUEST_URL_BYTES = 2048
+MAX_REQUEST_HEADER_BYTES = 32_000
+MAX_REQUEST_HEADER_VALUE_BYTES = 8_000
+MAX_TICKET_IMAGE_TICKETS_PER_USER_DAY = 12
+MAX_TRACKED_RATE_LIMIT_KEYS = 5000
+REDIS_FALLBACK_SECONDS = 30
+
+# Worker opcional de WhatsApp.
+EVOLUTION_TIMEOUT_SECONDS = 20
+WHATSAPP_MAX_ATTEMPTS = 3
+WHATSAPP_RETRY_BASE_SECONDS = 60
+WHATSAPP_QUEUE_LEASE_SECONDS = 120
+WHATSAPP_WORKER_LEASE_SECONDS = 180
+WHATSAPP_WORKER_POLL_SECONDS = 5.0
+WHATSAPP_WORKER_BATCH_SIZE = 20
+WHATSAPP_STREAM_MAXLEN = 10_000
+
+# Inicializacao da API.
+RUN_MIGRATIONS_ON_STARTUP = True
+STARTUP_LOCK_PATH = None
+STARTUP_LOCK_TIMEOUT_SECONDS = 120
+STARTUP_LOCK_STALE_SECONDS = 300

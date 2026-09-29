@@ -73,7 +73,7 @@ def _period_label(filters: dict) -> str:
     end_date = filters.get("end_date")
     if start_date and end_date:
         return f"{_format_date(start_date)} a {_format_date(end_date)}"
-    return "Todo o historico"
+    return "Todo o histórico"
 
 
 def report_pdf_filename(filters: dict | None) -> str:
@@ -135,7 +135,7 @@ def _technician_rows(technicians: list[dict], *, max_rows: int):
     remaining = rows[max_rows:]
     selected.append(
         {
-            "name": "Demais tecnicos",
+            "name": "Demais técnicos",
             "assigned_total": sum(_to_int(item.get("assigned_total")) for item in remaining),
             "resolved_total": sum(_to_int(item.get("resolved_total")) for item in remaining),
             "closed_total": sum(_to_int(item.get("closed_total")) for item in remaining),
@@ -144,38 +144,39 @@ def _technician_rows(technicians: list[dict], *, max_rows: int):
     return selected
 
 
-def build_reports_overview_pdf(data: dict) -> bytes:
+def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) -> bytes:
     try:
         from reportlab.lib import colors
-        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.enums import TA_RIGHT
+        from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
-        from reportlab.platypus import (
-            Paragraph,
-            SimpleDocTemplate,
-            Spacer,
-            Table,
-            TableStyle,
-        )
+        from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError as exc:  # pragma: no cover - depende da instalacao do deploy.
         raise RuntimeError("A dependência reportlab não está instalada.") from exc
 
-    page_size = landscape(A4)
+    page_size = A4
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
         pagesize=page_size,
-        rightMargin=10 * mm,
-        leftMargin=10 * mm,
-        topMargin=10 * mm,
-        bottomMargin=12 * mm,
-        title="HelpWeb Health - Relatorio gerencial",
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=13 * mm,
+        bottomMargin=15 * mm,
+        title="HelpWeb Health - Relatório de chamados",
         author="HelpWeb Health",
     )
     content_width = page_size[0] - document.leftMargin - document.rightMargin
-    card_gap = 4 * mm
-    card_width = (content_width - card_gap) / 2
+
+    blue = colors.HexColor("#0D6EA8")
+    ink = colors.HexColor("#10253A")
+    muted = colors.HexColor("#668096")
+    border = colors.HexColor("#DBE6EE")
+    soft_blue = colors.HexColor("#E6F4FD")
+    pale = colors.HexColor("#F5F9FC")
+    green = colors.HexColor("#287A57")
+    red = colors.HexColor("#B23A2E")
 
     styles = getSampleStyleSheet()
     styles.add(
@@ -183,9 +184,10 @@ def build_reports_overview_pdf(data: dict) -> bytes:
             name="ReportTitle",
             parent=styles["Title"],
             fontName="Helvetica-Bold",
-            fontSize=16,
-            leading=18,
-            textColor=colors.HexColor("#182315"),
+            fontSize=19,
+            leading=22,
+            alignment=0,
+            textColor=ink,
             spaceAfter=2,
         )
     )
@@ -194,28 +196,30 @@ def build_reports_overview_pdf(data: dict) -> bytes:
             name="SectionTitle",
             parent=styles["Heading2"],
             fontName="Helvetica-Bold",
-            fontSize=8.6,
-            leading=10,
-            textColor=colors.HexColor("#1c2b17"),
-            spaceAfter=2,
+            fontSize=10,
+            leading=12,
+            textColor=ink,
+            spaceBefore=3,
+            spaceAfter=5,
+            keepWithNext=True,
         )
     )
     styles.add(
         ParagraphStyle(
-            name="SmallText",
+            name="BodySmall",
             parent=styles["BodyText"],
-            fontSize=7.2,
-            leading=8.6,
-            textColor=colors.HexColor("#53604e"),
+            fontSize=8.5,
+            leading=11,
+            textColor=muted,
         )
     )
     styles.add(
         ParagraphStyle(
             name="TableText",
             parent=styles["BodyText"],
-            fontSize=7,
-            leading=8.2,
-            textColor=colors.HexColor("#182315"),
+            fontSize=8,
+            leading=10,
+            textColor=ink,
         )
     )
     styles.add(
@@ -224,9 +228,9 @@ def build_reports_overview_pdf(data: dict) -> bytes:
             parent=styles["BodyText"],
             alignment=TA_RIGHT,
             fontName="Helvetica-Bold",
-            fontSize=7,
-            leading=8.2,
-            textColor=colors.HexColor("#2f6426"),
+            fontSize=8,
+            leading=10,
+            textColor=ink,
         )
     )
     styles.add(
@@ -234,9 +238,9 @@ def build_reports_overview_pdf(data: dict) -> bytes:
             name="KpiLabel",
             parent=styles["BodyText"],
             fontName="Helvetica-Bold",
-            fontSize=6.5,
-            leading=7.8,
-            textColor=colors.HexColor("#53604e"),
+            fontSize=7.5,
+            leading=9,
+            textColor=muted,
         )
     )
     styles.add(
@@ -244,138 +248,83 @@ def build_reports_overview_pdf(data: dict) -> bytes:
             name="KpiValue",
             parent=styles["BodyText"],
             fontName="Helvetica-Bold",
-            fontSize=12,
-            leading=13,
-            textColor=colors.HexColor("#2f6426"),
+            fontSize=16,
+            leading=18,
+            textColor=blue,
         )
     )
     styles.add(
         ParagraphStyle(
-            name="Footer",
+            name="MetaRight",
             parent=styles["BodyText"],
-            alignment=TA_CENTER,
-            fontSize=6.5,
-            leading=8,
-            textColor=colors.HexColor("#6b7665"),
+            alignment=TA_RIGHT,
+            fontSize=8,
+            leading=11,
+            textColor=muted,
         )
     )
 
-    def paragraph(value, style_name: str = "TableText", max_length: int = 90):
+    def paragraph(value, style_name: str = "TableText", max_length: int = 100):
         return Paragraph(_safe_paragraph_text(value, max_length), styles[style_name])
 
-    def metric_card(title: str, rows: dict | None, *, max_rows: int = 6, daily: bool = False):
+    def metric_table(title: str, values: dict | None, *, width: float, max_rows: int = 5, daily: bool = False, preserve_order: bool = False):
         if daily:
-            items = _daily_rows(rows, max_rows=max_rows)
+            rows = _daily_rows(values, max_rows=max_rows)
         else:
-            items = _ranked_rows(rows, max_rows=max_rows)
+            rows = _ranked_rows(values, max_rows=max_rows, preserve_order=preserve_order)
 
-        table_rows = [[paragraph(title, "SectionTitle", 64), ""]]
-        if not items:
-            table_rows.append([paragraph("Sem dados para este recorte.", "SmallText", 80), ""])
+        table_rows = [[paragraph(title, "TableText", 80), ""]]
+        if not rows:
+            table_rows.append([paragraph("Sem dados neste recorte.", "BodySmall", 80), ""])
         else:
-            for key, value in items:
-                table_rows.append([paragraph(key, max_length=70), paragraph(value, "TableNumber")])
+            table_rows.extend(
+                [paragraph(label, max_length=72), paragraph(total, "TableNumber")]
+                for label, total in rows
+            )
 
         table = Table(
             table_rows,
-            colWidths=[card_width - 17 * mm, 17 * mm],
+            colWidths=[width - 18 * mm, 18 * mm],
             hAlign="LEFT",
             repeatRows=1,
         )
-        table.setStyle(
-            TableStyle(
-                [
-                    ("SPAN", (0, 0), (-1, 0)),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4e9")),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d8e1d3")),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
+        commands = [
+            ("SPAN", (0, 0), (-1, 0)),
+            ("BACKGROUND", (0, 0), (-1, 0), soft_blue),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.8, blue),
+            ("LINEBELOW", (0, 1), (-1, -1), 0.35, border),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]
+        if len(table_rows) == 2 and not rows:
+            commands.append(("SPAN", (0, 1), (-1, 1)))
+        table.setStyle(TableStyle(commands))
         return table
 
-    def metric_grid(cards):
-        flowables = []
-        for index in range(0, len(cards), 2):
-            pair = Table(
-                [[cards[index], cards[index + 1] if index + 1 < len(cards) else ""]],
-                colWidths=[card_width, card_width],
-                hAlign="LEFT",
-            )
-            pair.setStyle(
-                TableStyle(
-                    [
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                        ("TOPPADDING", (0, 0), (-1, -1), 0),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                        ("RIGHTPADDING", (0, 0), (0, 0), card_gap),
-                    ]
-                )
-            )
-            flowables.append(pair)
-            if index + 2 < len(cards):
-                flowables.append(Spacer(1, 2))
-        return flowables
-
-    def technician_card(technicians: list[dict], *, max_rows: int = 6):
-        rows = _technician_rows(technicians, max_rows=max_rows)
-        table_rows = [[paragraph("Desempenho por tecnico", "SectionTitle", 64), "", "", ""]]
-        if not rows:
-            table_rows.append([paragraph("Sem dados para este recorte.", "SmallText", 80), "", "", ""])
-        else:
-            table_rows.append(
-                [
-                    paragraph("Tecnico", "KpiLabel"),
-                    paragraph("Atr.", "KpiLabel"),
-                    paragraph("Res.", "KpiLabel"),
-                    paragraph("Fec.", "KpiLabel"),
-                ]
-            )
-            for tech in rows:
-                table_rows.append(
-                    [
-                        paragraph(tech.get("name"), max_length=50),
-                        paragraph(tech.get("assigned_total"), "TableNumber"),
-                        paragraph(tech.get("resolved_total"), "TableNumber"),
-                        paragraph(tech.get("closed_total"), "TableNumber"),
-                    ]
-                )
-
-        table = Table(
-            table_rows,
-            colWidths=[card_width - 42 * mm, 14 * mm, 14 * mm, 14 * mm],
-            hAlign="LEFT",
-            repeatRows=2 if len(table_rows) > 2 else 1,
-        )
-        table.setStyle(
+    def table_group(items: list[Table], widths: list[float], *, padding: float = 3 * mm):
+        group = Table([items], colWidths=widths, hAlign="LEFT")
+        group.setStyle(
             TableStyle(
                 [
-                    ("SPAN", (0, 0), (-1, 0)),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4e9")),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d8e1d3")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("LEFTPADDING", (1, 0), (-1, -1), padding),
+                    ("RIGHTPADDING", (0, 0), (-2, -1), padding),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
                 ]
             )
         )
-        if len(table_rows) == 2:
-            table.setStyle(TableStyle([("SPAN", (0, 1), (-1, 1))]))
-        return table
+        return group
 
     filters = data.get("filters") or {}
     metrics = data.get("summary_metrics") or {}
     sla = data.get("sla") or {}
     generated_at = _format_datetime(data.get("generated_at"))
-
     total_analyzed = _to_int(metrics.get("total_analyzed"))
     active_total = _to_int(metrics.get("active_total"))
     completed_total = _to_int(metrics.get("completed_total"))
@@ -386,162 +335,236 @@ def build_reports_overview_pdf(data: dict) -> bytes:
     sla_resolved_total = _to_int(metrics.get("sla_resolved_total"))
     sla_within_percent = _to_int(metrics.get("sla_within_percent"))
 
+    if viewer_role == "admin":
+        report_scope = "Visão consolidada da operação de suporte técnico."
+    else:
+        report_scope = "Visão dos chamados vinculados ao atendimento do técnico."
+
     header = Table(
-        [
+        [[
             [
-                [
-                    Paragraph("HelpWeb Health", styles["SmallText"]),
-                    Paragraph("Relatorio gerencial de chamados", styles["ReportTitle"]),
-                    Paragraph(
-                        "Indicadores consolidados de suporte tecnico para a operacao de TI em unidades de saude.",
-                        styles["SmallText"],
-                    ),
-                ],
-                [
-                    Paragraph("<b>Gerado em</b>", styles["SmallText"]),
-                    Paragraph(escape(generated_at), styles["SmallText"]),
-                ],
-            ]
-        ],
-        colWidths=[content_width - 45 * mm, 45 * mm],
+                Paragraph("HELPWEB HEALTH", styles["KpiLabel"]),
+                Paragraph("Relatório de chamados", styles["ReportTitle"]),
+                Paragraph(report_scope, styles["BodySmall"]),
+            ],
+            [
+                Paragraph("<b>Gerado em</b>", styles["MetaRight"]),
+                Paragraph(escape(generated_at), styles["MetaRight"]),
+            ],
+        ]],
+        colWidths=[content_width - 43 * mm, 43 * mm],
         hAlign="LEFT",
     )
     header.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LINEBELOW", (0, 0), (-1, -1), 1.2, colors.HexColor("#2f6426")),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LINEBELOW", (0, 0), (-1, -1), 1.5, blue),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
             ]
         )
     )
 
-    filter_cells = [
-        ("Periodo", _period_label(filters)),
+    filter_items = [
+        ("Período", _period_label(filters)),
         ("Status", LABELS.get(filters.get("status"), filters.get("status") or "Todos")),
         ("Prioridade", LABELS.get(filters.get("priority"), filters.get("priority") or "Todas")),
         ("Impacto", LABELS.get(filters.get("operational_impact"), filters.get("operational_impact") or "Todos")),
         ("Setor", filters.get("sector") or "Todos"),
         ("Categoria", filters.get("category") or "Todas"),
     ]
-    filter_table = Table(
-        [
-            [
-                [
-                    Paragraph(f"<b>{escape(label)}</b>", styles["SmallText"]),
-                    Paragraph(_safe_paragraph_text(value, 52), styles["TableText"]),
-                ]
-                for label, value in filter_cells[:3]
-            ],
-            [
-                [
-                    Paragraph(f"<b>{escape(label)}</b>", styles["SmallText"]),
-                    Paragraph(_safe_paragraph_text(value, 52), styles["TableText"]),
-                ]
-                for label, value in filter_cells[3:]
-            ],
-        ],
-        colWidths=[content_width / 3] * 3,
-        hAlign="LEFT",
+    filters_line = "  |  ".join(
+        f"<b>{escape(label)}:</b> {_safe_paragraph_text(value, 48)}"
+        for label, value in filter_items
     )
-    filter_table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbfdf8")),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d8e1d3")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
+    filter_summary = Paragraph(f"<b>Filtros aplicados</b><br/>{filters_line}", styles["BodySmall"])
 
-    def kpi_cell(label: str, value, caption: str):
+    def kpi_cell(label: str, value, color):
+        value_style = ParagraphStyle(
+            f"KpiValue{label.replace(' ', '')}",
+            parent=styles["KpiValue"],
+            textColor=color,
+        )
         return [
-            Paragraph(escape(label), styles["KpiLabel"]),
-            Paragraph(_safe_paragraph_text(value, 28), styles["KpiValue"]),
-            Paragraph(_safe_paragraph_text(caption, 46), styles["SmallText"]),
+            Paragraph(escape(label.upper()), styles["KpiLabel"]),
+            Paragraph(_safe_paragraph_text(value, 28), value_style),
         ]
 
     kpi_table = Table(
-        [
-            [
-                kpi_cell("Total analisado", total_analyzed, "Chamados no recorte"),
-                kpi_cell("Fila ativa", active_total, "Abertos e em andamento"),
-                kpi_cell("Concluidos", f"{completed_total} ({completed_percent}%)", "Resolvidos ou fechados"),
-                kpi_cell("SLA vencido", _to_int(sla.get("overdue")), "Ativos fora do prazo"),
-            ],
-            [
-                kpi_cell("Sem tecnico", _to_int(metrics.get("unassigned_active_total")), "Aguardando atribuicao"),
-                kpi_cell("Reaberturas", reopen_events, "Eventos no recorte"),
-                kpi_cell("Tempo medio", f"{avg_resolution_hours}h", "Resolucao dos chamados"),
-                kpi_cell("SLA cumprido", f"{sla_within_total}/{sla_resolved_total}", f"{sla_within_percent}% dos resolvidos"),
-            ],
-        ],
+        [[
+            kpi_cell("Total analisado", total_analyzed, blue),
+            kpi_cell("Fila ativa", active_total, blue),
+            kpi_cell("Concluídos", f"{completed_total} ({completed_percent}%)", green),
+            kpi_cell("SLA vencido", _to_int(sla.get("overdue")), red),
+        ]],
         colWidths=[content_width / 4] * 4,
         hAlign="LEFT",
     )
     kpi_table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#cddac7")),
+                ("BACKGROUND", (0, 0), (-1, -1), pale),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.5, border),
+                ("LINEBEFORE", (1, 0), (-1, -1), 0.5, border),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ]
         )
     )
 
-    cards = [
-        metric_card("Status", data.get("status_counts"), max_rows=6),
-        metric_card("Prioridade", data.get("priority_counts"), max_rows=6),
-        metric_card("Impacto operacional", data.get("impact_counts"), max_rows=6),
-        metric_card("Situacao da fila", data.get("queue_snapshot"), max_rows=6),
-        metric_card("Setores mais acionados", data.get("sector_counts"), max_rows=5),
-        metric_card("Categorias mais recorrentes", data.get("category_counts"), max_rows=5),
-        metric_card("Equipamentos recorrentes", data.get("equipment_counts"), max_rows=5),
-        metric_card("Solicitantes recorrentes", data.get("requester_counts"), max_rows=5),
-        metric_card("Evolucao recente por dia", data.get("daily_counts"), max_rows=6, daily=True),
-        metric_card("Idade da fila ativa", data.get("active_age_counts"), max_rows=6),
+    secondary_items = [
+        ("Sem técnico", _to_int(metrics.get("unassigned_active_total"))),
+        ("Reaberturas", reopen_events),
+        ("Tempo médio", f"{avg_resolution_hours}h"),
+        ("SLA cumprido", f"{sla_within_percent}% ({sla_within_total}/{sla_resolved_total})"),
     ]
-    if data.get("technicians"):
-        cards.append(technician_card(data.get("technicians") or [], max_rows=4))
+    secondary_table = Table(
+        [[
+            [Paragraph(escape(label), styles["BodySmall"]), Paragraph(f"<b>{escape(str(value))}</b>", styles["TableText"])]
+            for label, value in secondary_items
+        ]],
+        colWidths=[content_width / 4] * 4,
+        hAlign="LEFT",
+    )
+    secondary_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), soft_blue),
+                ("LINEBEFORE", (1, 0), (-1, -1), 0.5, border),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
 
+    third_width = content_width / 3
+    half_width = content_width / 2
     story = [
         header,
-        Spacer(1, 5),
-        filter_table,
-        Spacer(1, 5),
-        kpi_table,
         Spacer(1, 7),
-        Paragraph("Indicadores consolidados", styles["SectionTitle"]),
-        *metric_grid(cards),
+        filter_summary,
+        Spacer(1, 8),
+        Paragraph("Resumo operacional", styles["SectionTitle"]),
+        kpi_table,
+        Spacer(1, 3),
+        secondary_table,
+        Spacer(1, 10),
+        Paragraph("Distribuição", styles["SectionTitle"]),
+        table_group(
+            [
+                metric_table("Por status", data.get("status_counts"), width=third_width, max_rows=5),
+                metric_table("Por prioridade", data.get("priority_counts"), width=third_width, max_rows=4),
+                metric_table("Por impacto", data.get("impact_counts"), width=third_width, max_rows=4),
+            ],
+            [third_width] * 3,
+        ),
+        Spacer(1, 9),
+        Paragraph("Recorrências mais frequentes", styles["SectionTitle"]),
+        table_group(
+            [
+                metric_table("Setores", data.get("sector_counts"), width=third_width, max_rows=4),
+                metric_table("Categorias", data.get("category_counts"), width=third_width, max_rows=4),
+                metric_table("Equipamentos", data.get("equipment_counts"), width=third_width, max_rows=4),
+            ],
+            [third_width] * 3,
+        ),
+        Spacer(1, 9),
+        Paragraph("Fila e atividade recente", styles["SectionTitle"]),
+        table_group(
+            [
+                metric_table("Situação da fila", data.get("queue_snapshot"), width=half_width, max_rows=4, preserve_order=True),
+                metric_table("Idade dos chamados ativos", data.get("active_age_counts"), width=half_width, max_rows=4, preserve_order=True),
+            ],
+            [half_width, half_width],
+            padding=4 * mm,
+        ),
     ]
+
+    daily_values = data.get("daily_counts") or {}
+    if daily_values:
+        story.extend(
+            [
+                Spacer(1, 9),
+                KeepTogether(
+                    [
+                        Paragraph("Movimento recente", styles["SectionTitle"]),
+                        metric_table("Chamados criados por dia", daily_values, width=content_width, max_rows=7, daily=True),
+                    ]
+                ),
+            ]
+        )
+
+    technicians = data.get("technicians") or []
+    if technicians:
+        rows = _technician_rows(technicians, max_rows=5)
+        table_rows = [[
+            paragraph("Técnico", "KpiLabel"),
+            paragraph("Atribuídos", "KpiLabel"),
+            paragraph("Resolvidos", "KpiLabel"),
+            paragraph("Fechados", "KpiLabel"),
+        ]]
+        table_rows.extend(
+            [
+                paragraph(row.get("name"), max_length=70),
+                paragraph(row.get("assigned_total"), "TableNumber"),
+                paragraph(row.get("resolved_total"), "TableNumber"),
+                paragraph(row.get("closed_total"), "TableNumber"),
+            ]
+            for row in rows
+        )
+        technician_table = Table(
+            table_rows,
+            colWidths=[content_width - 63 * mm, 21 * mm, 21 * mm, 21 * mm],
+            repeatRows=1,
+            hAlign="LEFT",
+        )
+        technician_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), soft_blue),
+                    ("LINEBELOW", (0, 0), (-1, -1), 0.4, border),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        heading = "Atendimentos por técnico" if viewer_role == "admin" else "Atendimento do técnico"
+        story.extend(
+            [
+                Spacer(1, 9),
+                KeepTogether([Paragraph(heading, styles["SectionTitle"]), technician_table]),
+            ]
+        )
 
     story.extend(
         [
-            Spacer(1, 6),
+            Spacer(1, 7),
             Paragraph(
-                "Relatorio gerencial compacto: secoes extensas exibem os principais itens e consolidam o restante em 'Outros'. "
-                "O documento apresenta apenas indicadores de suporte tecnico e nao deve conter dados de pacientes.",
-                styles["SmallText"],
+                "Relatório de gestão da infraestrutura de TI. As métricas respeitam os filtros e as permissões da conta; não incluem dados clínicos.",
+                styles["BodySmall"],
             ),
         ]
     )
 
     def footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Helvetica", 6.5)
-        canvas.setFillColor(colors.HexColor("#6b7665"))
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(muted)
         canvas.drawCentredString(
             page_size[0] / 2,
-            6 * mm,
-            f"HelpWeb Health - Relatorio gerencial | Pagina {doc.page}",
+            7 * mm,
+            f"HelpWeb Health  |  Relatório operacional  |  Página {doc.page}",
         )
         canvas.restoreState()
 

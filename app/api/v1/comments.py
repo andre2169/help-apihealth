@@ -18,6 +18,7 @@ from app.core.exceptions import (
 router = APIRouter(
     prefix="/tickets/{ticket_id}/comments",
     tags=["Comments"],
+    dependencies=[Depends(require_user)],
 )
 
 

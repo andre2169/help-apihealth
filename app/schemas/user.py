@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from datetime import datetime
 from typing import Optional
 
@@ -70,11 +70,11 @@ class UserResponse(BaseModel):
     department: Optional[str] = None
     unit_name: Optional[str] = None
     notification_preference: str = "email"
+    is_active: bool = True
     avatar_image: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserAdminResponse(BaseModel):
     id: int
@@ -87,11 +87,11 @@ class UserAdminResponse(BaseModel):
     department: Optional[str] = None
     unit_name: Optional[str] = None
     notification_preference: str = "email"
+    is_active: bool = True
     avatar_image: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserAdminListResponse(BaseModel):
@@ -100,10 +100,19 @@ class UserAdminListResponse(BaseModel):
     email_masked: str
     role: str
     email_verified: bool = False
+    is_active: bool = True
     job_title: Optional[str] = None
     department: Optional[str] = None
     unit_name: Optional[str] = None
     created_at: datetime
+
+
+class UserAdminListPage(BaseModel):
+    items: list[UserAdminListResponse]
+    total: int | None = None
+    skip: int
+    limit: int
+    has_more: bool = False
 
 
 class UserAdminUpdate(BaseModel):
@@ -114,6 +123,7 @@ class UserAdminUpdate(BaseModel):
     department: Optional[str] = Field(default=None, max_length=30)
     unit_name: Optional[str] = Field(default=None, max_length=80)
     notification_preference: Optional[str] = Field(default=None, max_length=20)
+    is_active: Optional[bool] = None
 
     @field_validator("name", mode="before")
     @classmethod

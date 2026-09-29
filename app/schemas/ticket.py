@@ -81,6 +81,9 @@ class TicketResponse(TicketBase):
     updated_at: Optional[datetime]
     due_at: Optional[datetime]
     resolved_at: Optional[datetime]
+    deleted_at: Optional[datetime] = None
+    deleted_by_id: Optional[int] = None
+    deleted_by_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -103,6 +106,30 @@ class TicketListItemResponse(BaseModel):
 
 class TicketListResponse(BaseModel):
     items: list[TicketListItemResponse]
-    total: int
+    total: int | None = None
     skip: int
     limit: int
+    has_more: bool = False
+
+
+class DeletedTicketListItemResponse(BaseModel):
+    ticket_id: int
+    title: str
+    status: str
+    priority: str
+    sector: str
+    category: str
+    owner_name: Optional[str] = None
+    technician_name: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    deleted_at: datetime
+    deleted_by_name: Optional[str] = None
+
+
+class DeletedTicketListResponse(BaseModel):
+    items: list[DeletedTicketListItemResponse]
+    total: int | None = None
+    skip: int
+    limit: int
+    has_more: bool = False
