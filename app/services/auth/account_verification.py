@@ -82,19 +82,19 @@ def build_password_change_target(new_password: str) -> str:
 
 def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]:
     if purpose == PURPOSE_EMAIL_CHANGE:
-        subject = "Confirme a alteração de email - HelpWeb Health"
+        subject = "Confirme a alteração de email - HELP WEB HEALTH"
         action = "alterar o email da sua conta"
     elif purpose == PURPOSE_EMAIL_VERIFICATION:
-        subject = "Confirme seu cadastro - HelpWeb Health"
+        subject = "Confirme seu cadastro - HELP WEB HEALTH"
         action = "confirmar seu cadastro"
     elif purpose == PURPOSE_PASSWORD_RECOVERY:
-        subject = "Recupere sua senha - HelpWeb Health"
+        subject = "Recupere sua senha - HELP WEB HEALTH"
         action = "recuperar o acesso à sua conta"
     elif purpose == PURPOSE_LOGIN_MFA:
-        subject = "Confirme seu acesso - HelpWeb Health"
-        action = "confirmar seu acesso ao HelpWeb Health"
+        subject = "Confirme seu acesso - HELP WEB HEALTH"
+        action = "confirmar seu acesso ao HELP WEB HEALTH"
     else:
-        subject = "Confirme a alteração de senha - HelpWeb Health"
+        subject = "Confirme a alteração de senha - HELP WEB HEALTH"
         action = "alterar a senha da sua conta"
 
     body = (
@@ -102,7 +102,7 @@ def _message_for_code(*, user: User, code: str, purpose: str) -> tuple[str, str]
         f"Seu código para {action} é: {code}\n\n"
         f"Esse código expira em {policy.EMAIL_CODE_EXPIRE_MINUTES} minutos. "
         "Se você não solicitou essa alteração, ignore esta mensagem e avise o suporte.\n\n"
-        "HelpWeb Health"
+        "HELP WEB HEALTH"
     )
     return subject, body
 

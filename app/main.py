@@ -31,13 +31,15 @@ from app.api.v1 import (
     notifications,
     reports,
     webhooks,
+    maintenance_notices,
+    ticket_catalog,
 )
 
 setup_logging()
 
 
 app = FastAPI(
-    title="HelpWeb Health API",
+    title="HELP WEB HEALTH API",
     description="API de chamados de TI para instituições de saúde",
     version="0.2.0",
     docs_url=None,
@@ -130,6 +132,10 @@ app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")
+app.include_router(maintenance_notices.router, prefix="/api/v1")
+app.include_router(maintenance_notices.admin_router, prefix="/api/v1")
+app.include_router(ticket_catalog.router, prefix="/api/v1")
+app.include_router(ticket_catalog.admin_router, prefix="/api/v1")
 
 
 if policy.ENABLE_API_DOCS:
@@ -176,7 +182,7 @@ if policy.ENABLE_DB_HEALTH_ENDPOINT:
 
 @app.get("/")
 def root():
-    response = {"name": "HelpWeb Health API", "status": "ok"}
+    response = {"name": "HELP WEB HEALTH API", "status": "ok"}
     if policy.ENABLE_API_DOCS:
         response["docs"] = "/docs"
     return response

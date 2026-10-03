@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from io import BytesIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from app.services.reports.aggregation import activity_series
 
 
 LABELS = {
@@ -61,13 +62,6 @@ def _format_date(value: str | None) -> str:
         return value
 
 
-def _format_short_date(value: str) -> str:
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").strftime("%d/%m")
-    except ValueError:
-        return value
-
-
 def _period_label(filters: dict) -> str:
     start_date = filters.get("start_date")
     end_date = filters.get("end_date")
@@ -88,7 +82,7 @@ def _ranked_rows(data: dict | None, *, max_rows: int, preserve_order: bool = Fal
         (LABELS.get(str(key), str(key or "Sem valor")), _to_int(value))
         for key, value in (data or {}).items()
     ]
-    rows = [(label, total) for label, total in rows if total > 0]
+    rows = [(label, total) for label, total in rows if total > 0 or preserve_order]
 
     if not preserve_order:
         rows.sort(key=lambda item: (-item[1], item[0].lower()))
@@ -103,28 +97,11 @@ def _ranked_rows(data: dict | None, *, max_rows: int, preserve_order: bool = Fal
     return selected
 
 
-def _daily_rows(data: dict | None, *, max_rows: int):
-    rows = [(_format_short_date(str(key)), _to_int(value)) for key, value in (data or {}).items()]
-    rows = [(label, total) for label, total in rows if total > 0]
-    if len(rows) <= max_rows:
-        return rows
-
-    previous_total = sum(total for _, total in rows[:-max_rows])
-    selected = rows[-max_rows:]
-    if previous_total:
-        return [("Dias anteriores", previous_total), *selected]
-    return selected
-
-
 def _technician_rows(technicians: list[dict], *, max_rows: int):
     rows = sorted(
-        technicians or [],
+        [tech for tech in technicians or [] if _to_int(tech.get("assigned_total")) > 0],
         key=lambda tech: (
-            -(
-                _to_int(tech.get("assigned_total"))
-                + _to_int(tech.get("resolved_total"))
-                + _to_int(tech.get("closed_total"))
-            ),
+            -_to_int(tech.get("assigned_total")),
             str(tech.get("name") or "").lower(),
         ),
     )
@@ -164,8 +141,8 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
         leftMargin=14 * mm,
         topMargin=13 * mm,
         bottomMargin=15 * mm,
-        title="HelpWeb Health - Relatório de chamados",
-        author="HelpWeb Health",
+        title="HELP WEB HEALTH - Relatório de chamados",
+        author="HELP WEB HEALTH",
     )
     content_width = page_size[0] - document.leftMargin - document.rightMargin
 
@@ -267,11 +244,8 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
     def paragraph(value, style_name: str = "TableText", max_length: int = 100):
         return Paragraph(_safe_paragraph_text(value, max_length), styles[style_name])
 
-    def metric_table(title: str, values: dict | None, *, width: float, max_rows: int = 5, daily: bool = False, preserve_order: bool = False):
-        if daily:
-            rows = _daily_rows(values, max_rows=max_rows)
-        else:
-            rows = _ranked_rows(values, max_rows=max_rows, preserve_order=preserve_order)
+    def metric_table(title: str, values: dict | None, *, width: float, max_rows: int = 5, preserve_order: bool = False):
+        rows = _ranked_rows(values, max_rows=max_rows, preserve_order=preserve_order)
 
         table_rows = [[paragraph(title, "TableText", 80), ""]]
         if not rows:
@@ -343,7 +317,7 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
     header = Table(
         [[
             [
-                Paragraph("HELPWEB HEALTH", styles["KpiLabel"]),
+                Paragraph("HELP WEB HEALTH", styles["KpiLabel"]),
                 Paragraph("Relatório de chamados", styles["ReportTitle"]),
                 Paragraph(report_scope, styles["BodySmall"]),
             ],
@@ -472,7 +446,7 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
             [
                 metric_table("Setores", data.get("sector_counts"), width=third_width, max_rows=4),
                 metric_table("Categorias", data.get("category_counts"), width=third_width, max_rows=4),
-                metric_table("Equipamentos", data.get("equipment_counts"), width=third_width, max_rows=4),
+                metric_table("Equipamentos com mais chamados", data.get("equipment_counts"), width=third_width, max_rows=4),
             ],
             [third_width] * 3,
         ),
@@ -481,28 +455,28 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
         table_group(
             [
                 metric_table("Situação da fila", data.get("queue_snapshot"), width=half_width, max_rows=4, preserve_order=True),
-                metric_table("Idade dos chamados ativos", data.get("active_age_counts"), width=half_width, max_rows=4, preserve_order=True),
+                metric_table("Tempo em aberto", data.get("active_age_counts"), width=half_width, max_rows=4, preserve_order=True),
             ],
             [half_width, half_width],
             padding=4 * mm,
         ),
     ]
 
-    daily_values = data.get("daily_counts") or {}
-    if daily_values:
+    series = data.get("activity_series") or activity_series(data.get("daily_counts") or {})
+    if series.get("counts"):
         story.extend(
             [
                 Spacer(1, 9),
                 KeepTogether(
                     [
-                        Paragraph("Movimento recente", styles["SectionTitle"]),
-                        metric_table("Chamados criados por dia", daily_values, width=content_width, max_rows=7, daily=True),
+                        Paragraph("Evolução no período", styles["SectionTitle"]),
+                        metric_table(series["title"], series["counts"], width=content_width, max_rows=8, preserve_order=True),
                     ]
                 ),
             ]
         )
 
-    technicians = data.get("technicians") or []
+    technicians = [tech for tech in data.get("technicians") or [] if _to_int(tech.get("assigned_total")) > 0]
     if technicians:
         rows = _technician_rows(technicians, max_rows=5)
         table_rows = [[
@@ -557,6 +531,13 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
         ]
     )
 
+    non_technician_total = _to_int(data.get("non_technician_assigned_total"))
+    if non_technician_total:
+        story.append(Paragraph(
+            f"{non_technician_total} chamados atribuídos a administradores ou outros perfis permanecem nos totais gerais, fora da tabela de técnicos.",
+            styles["BodySmall"],
+        ))
+
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
@@ -564,7 +545,7 @@ def build_reports_overview_pdf(data: dict, *, viewer_role: str | None = None) ->
         canvas.drawCentredString(
             page_size[0] / 2,
             7 * mm,
-            f"HelpWeb Health  |  Relatório operacional  |  Página {doc.page}",
+            f"HELP WEB HEALTH  |  Relatório operacional  |  Página {doc.page}",
         )
         canvas.restoreState()
 

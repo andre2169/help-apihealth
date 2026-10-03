@@ -11,6 +11,7 @@ from app.deps import get_db
 from app.schemas.auth import (
     AccountRecoveryConfirm,
     AccountRecoveryRequest,
+    MFARecoveryCodeGenerate,
     LoginMFAConfirm,
     LoginRequest,
     LoginResponse,
@@ -36,6 +37,7 @@ from app.middlewares.csrf import _set_csrf_cookie, clear_csrf_cookie
 from app.services.auth.login import login_service
 from app.core.exceptions import InvalidCredentials
 from app.core.dependencies import extract_auth_token, get_current_user, security
+from app.core.permissions import require_user
 from app.services.auth.account_verification import (
     PURPOSE_EMAIL_CHANGE,
     PURPOSE_EMAIL_VERIFICATION,
@@ -47,6 +49,12 @@ from app.services.auth.account_verification import (
     create_account_verification,
 )
 from app.services.auth.tokens import revoke_token
+from app.services.auth.mfa_recovery import (
+    RECOVERY_CODE_COUNT,
+    consume_recovery_code,
+    count_recovery_codes,
+    generate_recovery_codes,
+)
 from app.services.audit.events import record_audit_event
 
 from app.services.auth.rate_limits import (
@@ -371,19 +379,32 @@ def verify_login_mfa(
             detail="Código inválido ou expirado.",
         )
 
-    consume_account_verification(
-        db=db,
-        user=user,
-        purpose=PURPOSE_LOGIN_MFA,
-        target_value=data.challenge_id,
-        code=data.code,
-    )
+    used_recovery_code = "-" in data.code
+    if used_recovery_code:
+        if not consume_recovery_code(db=db, user_id=user.id, code=data.code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Código inválido ou expirado.",
+            )
+        pending.used_at = datetime.now(timezone.utc)
+    else:
+        consume_account_verification(
+            db=db,
+            user=user,
+            purpose=PURPOSE_LOGIN_MFA,
+            target_value=data.challenge_id,
+            code=data.code,
+        )
     db.commit()
 
     record_audit_event(
         db,
         actor_id=user.id,
-        action="auth.login_mfa_verified",
+        action=(
+            "auth.login_mfa_recovery_code_used"
+            if used_recovery_code
+            else "auth.login_mfa_verified"
+        ),
         target_type="user",
         target_id=user.id,
         ip_address=ip,
@@ -392,6 +413,53 @@ def verify_login_mfa(
     _set_auth_cookie(response, _create_session_token(user))
     logger.info("Segundo fator de login confirmado | ip=%s | user_id=%s", ip, user.id)
     return {"status": "ok", "token_type": "cookie"}
+
+
+@router.get("/mfa/recovery-codes")
+def get_mfa_recovery_code_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    if current_user.role not in policy.LOGIN_MFA_ROLES:
+        raise HTTPException(status_code=403, detail="Recurso disponível apenas para equipe técnica.")
+    return {"remaining": count_recovery_codes(db=db, user_id=current_user.id)}
+
+
+@router.post("/mfa/recovery-codes")
+def issue_mfa_recovery_codes(
+    data: MFARecoveryCodeGenerate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    if current_user.role not in policy.LOGIN_MFA_ROLES:
+        raise HTTPException(status_code=403, detail="Recurso disponível apenas para equipe técnica.")
+    if not consume_action_rate_limit(
+        action="mfa_recovery_codes_generate",
+        key=str(current_user.id),
+        max_requests=policy.MFA_RECOVERY_GENERATE_MAX_REQUESTS,
+        window_seconds=policy.MFA_RECOVERY_GENERATE_WINDOW_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas solicitações. Aguarde antes de gerar novos códigos.",
+            headers={"Retry-After": str(policy.MFA_RECOVERY_GENERATE_WINDOW_SECONDS)},
+        )
+    if not verify_password(data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Não foi possível confirmar sua senha atual.")
+
+    codes = generate_recovery_codes(db=db, user=current_user)
+    record_audit_event(
+        db,
+        actor_id=current_user.id,
+        action="auth.mfa_recovery_codes_generated",
+        target_type="user",
+        target_id=current_user.id,
+        ip_address=get_client_ip(request),
+        details={"count": RECOVERY_CODE_COUNT},
+    )
+    db.commit()
+    return {"codes": codes, "remaining": len(codes)}
 
 
 @router.post("/password/recovery/request")

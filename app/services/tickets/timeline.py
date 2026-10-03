@@ -18,7 +18,10 @@ def get_ticket_timeline(db, ticket_id: int):
             User.avatar_image.label("user_avatar_image"),
         )
         .join(User, User.id == TicketEvent.user_id)
-        .filter(TicketEvent.ticket_id == ticket_id)
+        .filter(
+            TicketEvent.ticket_id == ticket_id,
+            TicketEvent.event_type != "COMMENTED",
+        )
         .all()
     )
 

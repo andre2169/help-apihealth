@@ -11,6 +11,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # Variaveis de ambiente e segredos
 .env
@@ -21,6 +23,17 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+
+# Pacotes de deploy, backups e chaves privadas
+*.zip
+*.dump
+*.pem
+*.key
+*.pfx
+backups/
 
 # Logs
 *.log

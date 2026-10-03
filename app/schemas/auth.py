@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -58,4 +59,16 @@ class LoginResponse(BaseModel):
 
 class LoginMFAConfirm(BaseModel):
     challenge_id: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
-    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    code: str = Field(min_length=6, max_length=14)
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def validate_mfa_code(cls, value):
+        value = str(value or "").strip().upper()
+        if not re.fullmatch(r"(?:\d{6}|[A-F0-9]{4}(?:-[A-F0-9]{4}){2})", value):
+            raise ValueError("Informe o código de acesso ou um código de recuperação válido.")
+        return value
+
+
+class MFARecoveryCodeGenerate(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)

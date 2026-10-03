@@ -126,13 +126,28 @@ def close_ticket(
 def reopen_ticket(
     ticket_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    try:
+        return ticket_service.reopen_ticket_service(
+            db=db, ticket_id=ticket_id, current_user=current_user,
+        )
+    except Exception as exc:
+        _http_error(exc)
+
+
+@router.patch("/{ticket_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_ticket(
+    ticket_id: int,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_user),
 ):
-    return ticket_service.reopen_ticket_service(
-        db=db,
-        ticket_id=ticket_id,
-        current_user=current_user,
-    )
+    try:
+        ticket_service.cancel_ticket_service(
+            db=db, ticket_id=ticket_id, current_user=current_user,
+        )
+    except Exception as exc:
+        _http_error(exc)
 
 
 @router.delete("/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)

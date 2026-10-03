@@ -84,6 +84,7 @@ class TicketResponse(TicketBase):
     deleted_at: Optional[datetime] = None
     deleted_by_id: Optional[int] = None
     deleted_by_name: Optional[str] = None
+    can_cancel: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -97,6 +98,7 @@ class TicketListItemResponse(BaseModel):
     equipment: Optional[str] = None
     operational_impact: str
     status: str
+    sla_hours: int = 24
     technician_id: Optional[int] = None
     owner_name: Optional[str] = None
     technician_name: Optional[str] = None

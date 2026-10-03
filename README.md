@@ -1,6 +1,10 @@
-﻿# HelpWeb Health API
+# HELP WEB HEALTH API
 
-Estado sincronizado com a fonte ativa em 29/09/2026. SQLite e usado localmente; PostgreSQL e usado na hospedagem. O arquivo `.env` real nunca deve ser versionado.
+Este repositorio contem o codigo-fonte, migracoes, testes e ferramentas locais.
+O desenvolvimento nao depende da Shard ou de outra hospedagem. Use Python 3.11
+ou 3.12 e mantenha os clones `helphealth-api` e `helphealth-web` lado a lado
+para executar o roteiro conjunto de testes. Configuracoes reais de producao,
+bancos, ambientes virtuais e ZIPs de deploy nao fazem parte do Git.
 
 Backend do **HelpWeb Health**, uma API REST desenvolvida com FastAPI para gerenciamento de chamados de TI em instituicoes de saude publica, como hospitais, clinicas, laboratorios, UPAs e setores administrativos ligados ao atendimento.
 
@@ -25,17 +29,40 @@ A API centraliza o ciclo de vida dos chamados:
 - controle de perfis de acesso;
 - indicadores para dashboard e relatorios filtrados.
 
-Essa organizacao ajuda a reduzir perda de informacao, comunicacoes informais sem registro e dificuldade de priorizacao em setores sensiveis da saude publica.
+Essa organizacao ajuda a reduzir perda de informacao, ligaÃ§Ãµes informais sem registro e dificuldade de priorizacao em setores sensiveis da saude publica.
 
 ## Perfis de usuario
 
 O sistema trabalha com tres perfis:
 
-- `user`: funcionario comum. Pode abrir chamados, acompanhar os proprios chamados, comentar, fechar ou reabrir quando permitido.
+- `user`: funcionario comum. Pode abrir chamados, acompanhar os proprios chamados, comentar, confirmar o fechamento de resolvidos e cancelar antes do primeiro atendimento. Nao pode excluir, recuperar ou reabrir chamados ja assumidos.
 - `technician`: tecnico de TI. Pode visualizar chamados atribuidos a ele e chamados abertos/reabertos sem tecnico na fila compartilhada, assumir atendimentos, resolver chamados e consultar indicadores pessoais.
 - `admin`: administrador. Pode gerenciar usuarios, visualizar indicadores e executar acoes administrativas.
 
 Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`. O administrador recebe a visao global; o tecnico recebe somente metricas dos chamados atribuidos a ele. A fila compartilhada aparece separadamente para operacao e nao contamina os indicadores pessoais. O escopo e aplicado na API, inclusive em detalhes, timeline, listagem e PDF, evitando que o frontend seja a unica barreira.
+
+### Cancelamento e recuperacao de chamados
+
+- `PATCH /api/v1/tickets/{id}/cancel`: exige sessao, CSRF e autoria do chamado.
+  So permite status `open`, sem tecnico e sem evento `ASSIGNED` no historico.
+  Limpar o tecnico de um chamado que ja foi assumido nao libera cancelamento.
+- Assumir e cancelar usam atualizacoes condicionais no banco: uma solicitacao
+  concorrente nao pode assumir um chamado cancelado nem cancelar um assumido.
+- O cancelamento e uma exclusao logica com status `cancelled`, evento `CANCELLED`
+  e auditoria `ticket.cancelled`. Nao apaga historico, comentarios ou imagens.
+  Remove notificacoes e nao entra na fila, listas operacionais, indicadores ou PDF.
+- Excluidos e cancelados continuam no arquivo de consulta, com o escopo de
+  visibilidade existente. Recuperacao, exclusao e reabertura exigem administrador.
+- Recuperar um cancelado devolve o status `open` e calcula novo prazo SLA.
+  Recuperar outro chamado excluido preserva o status original. O evento
+  `RECOVERED` registra a transicao e os eventos anteriores sao mantidos.
+- O detalhe informa `can_cancel` calculado na API para o usuario autenticado;
+  ocultar um botao nao substitui a validacao do endpoint.
+- Os totais da fila e de atendimentos em andamento sao separados das listas
+  resumidas do dashboard, limitadas a oito itens. Excluidos nao entram em ambos.
+
+Nao e necessaria migracao de schema para esta regra: `status` ja e texto e os
+campos de exclusao logica ja existem. A validacao de enum aceita `cancelled`.
 
 ## Principais recursos
 
@@ -69,6 +96,25 @@ Endpoints de dashboard e relatorios sao protegidos para `technician` e `admin`. 
 - Chamados com setor, categoria, equipamento, codigo de patrimonio, impacto operacional e SLA.
 - Ate 3 fotos opcionais do problema no chamado, recebidas ja compactadas pelo frontend e validadas novamente no backend.
 - Foto de perfil do usuario.
+- Avisos operacionais por setor, gerenciados somente por administradores.
+  Criacao e edicao validam texto, nivel, setores oficiais e prazo com fuso horario.
+  Edicao preserva autor, data de publicacao e estado de ativacao. Setores antigos
+  ja vinculados podem ser mantidos, mas novos destinos devem estar ativos.
+  Avisos vencidos nao podem ser reativados sem alterar ou remover o prazo.
+  Edicao (`PATCH /api/v1/admin/maintenance-notices/{id}`), exclusao
+  (`DELETE /api/v1/admin/maintenance-notices/{id}`) e ativacao/desativacao
+  exigem sessao de administrador e CSRF, com registro de auditoria.
+- Avisos possuem publico `all`, `users` ou `technicians`, aplicado pela API
+  junto ao setor e ao periodo de validade. Administradores podem consultar
+  e gerenciar todos os publicos.
+- Leitura persistente por conta e versao em `maintenance_notice_reads`.
+  `POST /api/v1/maintenance-notices/{id}/read` recebe apenas `revision`;
+  o usuario vem da sessao autenticada. Exige CSRF, aplica escopo de visibilidade
+  e e idempotente. Versoes antigas recebem 409 sem marcar a versao nova.
+  A listagem publica retorna somente avisos ativos nao lidos pela conta;
+  a administrativa continua mostrando todos. Alterar conteudo, nivel, publico,
+  setores ou prazo gera nova versao. Salvar sem mudancas nao redefine leituras.
+  Migracao `j0k1l2m3n4o5` preserva avisos existentes com publico geral e versao 1.
 - Timeline de eventos e comentarios.
 - Notificacoes persistentes por usuario para tecnicos e administradores.
 - Relatorios por periodo, status, prioridade, setor, categoria, equipamento, impacto, SLA, idade da fila, volume diario, solicitantes recorrentes e reaberturas.
@@ -110,26 +156,25 @@ Crie um arquivo `.env` na raiz da API usando `.env.example` como base:
 DATABASE_URL=sqlite:///./helphealth.db
 # Para PostgreSQL na hospedagem:
 # DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
-SECRET_KEY=coloque_uma_chave_aleatoria_real_com_32_ou_mais_caracteres
+SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
 AUTH_COOKIE_SECURE=false
 AUTH_COOKIE_SAMESITE=lax
 AUTH_COOKIE_DOMAIN=
-ADMIN_EMAIL=admin@example.invalid
-ADMIN_PASSWORD=troque_por_uma_senha_forte_com_12_ou_mais_caracteres
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=troque_esta_senha_antes_de_publicar
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-SMTP_USERNAME=SEU_EMAIL@gmail.com
+SMTP_USERNAME=
 SMTP_PASSWORD=
 REDIS_URL=
 TRUSTED_PROXY_HOPS=0
-STARTUP_LOCK_PATH=
 ```
 
 Descricao:
 
-- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pela Shard, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. Se a Shard entregar `postgres://`, a aplicacao normaliza automaticamente para `postgresql://`. Quando o host do PostgreSQL nao for local, a API força `sslmode=require` mesmo que a URL original nao traga parametro de SSL.
+- `DATABASE_URL`: endereco do banco. Para SQLite local, use `sqlite:///./helphealth.db`. Para PostgreSQL, use a URL fornecida pelo seu provedor, no formato `postgresql://usuario:senha@host:porta/banco?sslmode=require`. URLs `postgres://` sao normalizadas para `postgresql://`. Quando o host do PostgreSQL nao for local, a API exige `sslmode=require` mesmo que a URL original nao traga SSL.
 - `SECRET_KEY`: chave usada para assinar tokens JWT. A API recusa iniciar com chave de exemplo ou menor que 32 caracteres.
 - `AUTH_COOKIE_SECURE`: use `false` somente em teste local HTTP. Em producao HTTPS, use `true`.
-- `AUTH_COOKIE_SAMESITE`: use `lax` em teste local. Se frontend e API ficarem em subdominios diferentes na Shard, use `none` junto com `AUTH_COOKIE_SECURE=true`.
+- `AUTH_COOKIE_SAMESITE`: use `lax` em teste local ou em producao no mesmo site. Use `none` junto com `AUTH_COOKIE_SECURE=true` apenas quando frontend e API estiverem em sites diferentes. Alguns navegadores bloqueiam cookies de terceiros; prefira publicar ambos no mesmo site.
 - `AUTH_COOKIE_DOMAIN`: normalmente fica vazio. Configure dominio compartilhado apenas se souber exatamente o dominio-base aceito pelo navegador.
 - Os nomes dos cookies, algoritmo JWT, expiracao da sessao e header CSRF ficam fixos em `app/core/security_policy.py`.
 - `GET /api/v1/auth/csrf`: rota autenticada que devolve somente o token CSRF da sessao para o frontend cross-origin. Ela nao devolve o JWT nem dados sensiveis.
@@ -146,6 +191,39 @@ Descricao:
 
 Nunca suba o arquivo `.env` para o GitHub. Ele pode conter senhas, chaves e URLs privadas.
 
+### Catalogo oficial e relatorios
+
+- Setores e categorias de novos chamados sao selecionados no catalogo oficial.
+  A API recusa nomes desconhecidos ou inativos, inclusive em envios diretos.
+- Administradores gerenciam o catalogo em **Setores e categorias**: adicionar,
+  editar, excluir quando nao utilizado, desativar e reativar. Os nomes equivalentes por acento, caixa e espacos nao
+  podem ser cadastrados duas vezes. Desativar nao altera os chamados antigos.
+- Renomear atualiza a classificacao dos chamados vinculados (inclusive os
+  arquivados), sem mudar comentarios, eventos ou datas operacionais. Para
+  setores, tambem atualiza os setores equivalentes nos perfis e avisos.
+  A alteracao e registrada na auditoria, com nome anterior e totais afetados.
+- Excluir e bloqueado quando houver chamados, perfis ou avisos vinculados;
+  nesse caso, o administrador deve desativar o cadastro. A API nao apaga
+  chamados para excluir um item do catalogo.
+- A migracao `i9j0k1l2m3n4` cria o catalogo com os 12 setores e as 12 categorias
+  inicialmente sugeridos pelo sistema. Nomes livres antigos nao sao importados
+  automaticamente como opcoes oficiais; o administrador deve cadastrar os
+  nomes legitimos que faltarem.
+- Relatorios agrupam grafias equivalentes, inclusive em filtros e no PDF.
+  Erros de digitacao nao sao mesclados automaticamente com outro nome.
+- A tela mostra os seis itens de maior volume e soma os demais em **Outros**.
+  O PDF tambem consolida os demais itens, preservando todos os totais.
+- A evolucao cobre o periodo completo com ate oito intervalos, por dia, semana,
+  mes, trimestre ou ano. Periodos muito longos usam intervalos de anos.
+- A tabela de atendimento lista apenas contas com perfil de tecnico, tem busca
+  e paginacao na tela e resumo no PDF. Atendimentos de administradores continuam
+  nos totais gerais, com sua quantidade indicada separadamente.
+- Rotas: `GET /api/v1/ticket-catalog/` (contas verificadas),
+  `POST /api/v1/admin/ticket-catalog/` e
+  `PATCH /api/v1/admin/ticket-catalog/{id}/active`,
+  `PATCH /api/v1/admin/ticket-catalog/{id}` e
+  `DELETE /api/v1/admin/ticket-catalog/{id}` (administradores, com CSRF).
+
 ### Segurança local e CI
 
 Depois de instalar as dependências de desenvolvimento, rode:
@@ -155,6 +233,7 @@ python -m pytest -q
 python -m compileall -q app main.py
 python -m pip check
 pip-audit -r requirements-dev.txt
+bandit -r app main.py -ll -iii
 ```
 
 O workflow em `.github/workflows/security.yml` executa essas verificações principais em pull requests e pushes para `main`. O Dependabot em `.github/dependabot.yml` acompanha atualizações de pacotes Python e GitHub Actions.
@@ -165,22 +244,72 @@ pode validar o frontend local:
 ```powershell
 .\tools\local_security_check.ps1
 .\tools\local_full_check.ps1
+.\tools\local_full_check.ps1 -IncludeBrowserTests
 ```
 
-O segundo script executa lint e build do frontend depois da API. O
+O roteiro conjunto executa os controles da API, lint, testes unitarios, build
+e auditoria do frontend. A opcao `-IncludeBrowserTests` acrescenta os testes
+de interface e PWA com dados simulados, servindo o build local e encerrando
+o servidor ao terminar. Feche outro frontend na porta 5173 antes dessa opcao.
+Requer Node.js 22.12 ou superior e Edge instalado (ou Chrome, selecionado por
+`$env:UI_TEST_BROWSER = "chrome"`). Os scripts funcionam mesmo quando chamados
+de outro diretorio. O
 `pip-audit` consulta o servico online de advisories; se a rede estiver
 indisponivel, a etapa falha com timeout explicito e nao deve ser interpretada
 como auditoria concluida.
 
-Se o SMTP nao estiver configurado, a API gera o codigo, mas nao exibe o codigo nos logs. Configure um SMTP real para testar o envio.
+Os testes de release incluem sessoes independentes disputando cancelamento,
+atribuicao e recuperacao, rollback de falha de auditoria, acesso a dados de
+outra conta, CSRF nas novas operacoes administrativas e entradas JWT invalidas.
+Usam banco temporario; nao se conectam ao PostgreSQL da hospedagem.
+
+### Dependencias e banco de dados
+
+`requirements.txt` separa dependencias diretas das transitivas, todas com
+versao fixa. As transitivas sao usadas pelos frameworks e nao devem ser
+retiradas apenas por nao existir um import direto. Pillow e charset-normalizer
+fazem parte da geracao de PDFs; colorama e instalado somente no Windows.
+`requirements-dev.txt` acrescenta testes e verificadores apenas no ambiente de
+desenvolvimento. `requirements-postgres.txt` e um atalho de compatibilidade,
+nao uma segunda lista de pacotes.
+
+PostgreSQL usa psycopg2-binary no ambiente de producao. SQLite vem da
+biblioteca padrao do Python, nao instala um driver extra e permanece apenas
+como opcao local e banco temporario dos testes. SQLAlchemy e Alembic sao
+necessarios tambem para PostgreSQL. A ferramenta historica de importacao do
+SQLite fica em `tools/` e nao e incluida no ZIP de deploy.
+
+Redis, fila e worker WhatsApp foram preservados para ativacao futura. O cliente
+Evolution usa a biblioteca padrao; nao necessita SDK adicional. Os testes de
+arquitetura conferem imports, arvore transitiva, versoes e ausencia de pacotes
+legados sem uso. python-jose, ecdsa e auxiliares antigos nao sao dependencias
+da autenticacao atual, que usa PyJWT com HS256.
+
+Em 03/10/2026, PyJWT foi atualizado de 2.13.0 para 2.15.1 para incorporar
+correcoes publicadas pelo mantenedor. A autenticacao continua limitada a
+HS256 e nao aceita um algoritmo escolhido pelo cliente.
+O cliente Evolution nao segue redirecionamentos, evitando encaminhar sua
+chave a outro endereco. WhatsApp/Redis continuam opcionais e desativados.
+
+Bandit deve ser revisado tambem sem filtros antes de releases: alertas de
+baixa severidade sobre subprocess de migracao (argumentos fixos, sem shell),
+marcadores `token_type` e nomes de finalidade nao sao senhas embutidas.
+O bind `0.0.0.0` e intencional no servico hospedado; restricao de acesso
+depende do proxy/firewall. Nao existe garantia de ausencia de vulnerabilidades.
+
+Sem SMTP, o codigo de MFA de login de administrador/tecnico pode ser mostrado
+no terminal somente com SQLite e origens HTTP estritamente locais. Codigos de
+cadastro e recuperacao nao sao expostos dessa forma. Para esses fluxos e para
+MFA em producao, configure SMTP real; os testes automatizados simulam o envio.
 
 ### SMTP com Gmail
 
-Para habilitar o envio via Gmail, use uma conta de suporte controlada por voce, ative a verificacao em duas etapas e gere uma senha de app. Configure os valores reais somente no painel privado da hospedagem:
+Para usar sua propria conta Gmail, ative a verificacao em duas etapas e gere
+uma senha de app. Configure apenas no `.env` privado ou ambiente da hospedagem:
 
 ```env
-SMTP_USERNAME=SEU_EMAIL@gmail.com
-SMTP_PASSWORD=COLOQUE_A_SENHA_DE_APP_NO_PAINEL
+SMTP_USERNAME=sua-conta@gmail.com
+SMTP_PASSWORD=sua_senha_de_app_do_google_sem_espacos
 ```
 
 Use a senha de app de 16 caracteres, nao a senha normal da conta Google. Se voce copiar a senha com espacos, a API remove os espacos automaticamente; o ideal e salvar sem espacos no painel.
@@ -215,10 +344,23 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 Instale as dependencias:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 ```
 
-Crie o arquivo `.env` com base no `.env.example`.
+Crie o arquivo `.env` sem substituir uma configuracao existente:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Antes de iniciar, coloque a chave gerada em `SECRET_KEY` e defina uma senha
+propria em `ADMIN_PASSWORD` (12 caracteres ou mais, no maximo 72 bytes).
+Os exemplos dessas duas variaveis sao recusados pela API. `admin@example.com`
+serve somente para demonstracao local; use email real para receber mensagens.
+Deixe SMTP, Redis e WhatsApp sem configuracao no teste local inicial. O
+administrador e criado na primeira inicializacao; modificar a variavel depois
+nao altera a senha de uma conta ja existente.
 
 Execute a API:
 
@@ -281,9 +423,10 @@ Para aplicar manualmente:
 alembic upgrade head
 ```
 
-### Usando PostgreSQL na Shard
+### Usando PostgreSQL em producao
 
-No painel da API na Shard, troque apenas a variavel `DATABASE_URL` pela URL do PostgreSQL criado na plataforma. Exemplo:
+No ambiente da API, configure `DATABASE_URL` com o PostgreSQL do seu provedor.
+Esse ajuste nao requer alterar a arquitetura nem o codigo. Exemplo:
 
 ```env
 DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
@@ -339,7 +482,7 @@ O script recusa copiar para um PostgreSQL que ja tenha dados. Use `--replace` so
 - O projeto pode usar SQLite em deploy simples, mas PostgreSQL e recomendado para ambiente real por oferecer melhor concorrencia, backup, isolamento e recursos de seguranca do banco gerenciado.
 - O arquivo SQLite nao e criptografado integralmente por padrao; para dados reais, prefira PostgreSQL gerenciado com criptografia em repouso, backup e controle de acesso.
 - A listagem administrativa de usuarios retorna email mascarado e nao envia foto/base64 em massa.
-- O endpoint `/api/v1/admin/network-debug` fica desabilitado no codigo depois da validacao do proxy da Shard.
+- O endpoint `/api/v1/admin/network-debug` permanece desabilitado no codigo.
 - Telefones de perfil e cadastro aceitam apenas numeros do Brasil no formato DDD + numero, sem DDI ou `+55`.
 - Novos cadastros precisam confirmar email antes de abrir chamados.
 - Eventos sensiveis sao registrados em trilha de auditoria persistente (`audit_events`) sem gravar senha, token, codigo temporario ou email completo.
@@ -366,7 +509,7 @@ Esse fluxo usa a mesma tabela de verificacao temporaria de email/senha, com prop
 
 ## Notificacoes internas
 
-Quando um funcionario abre um chamado ou reabre um chamado resolvido/fechado, a API cria notificacoes para tecnicos conforme o vinculo e o tipo do evento. O administrador nao e destinatario da caixa comum de notificacoes, mas pode consultar o historico global pela area administrativa. A regra fica no backend, nao no frontend.
+Quando um funcionario abre um chamado ou um administrador reabre um chamado resolvido/fechado, a API cria notificacoes para tecnicos conforme o vinculo e o tipo do evento. O administrador nao e destinatario da caixa comum de notificacoes, mas pode consultar o historico global pela area administrativa. A regra fica no backend, nao no frontend.
 
 Endpoints:
 
@@ -427,17 +570,6 @@ usuarios ou chamados reais. O `--reset` tambem reconhece o prefixo antigo
 `[DEMO]` para limpar uma carga criada por uma versao anterior do script. Mesmo
 assim, mantenha um backup do banco local antes de usar `--reset`.
 
-### Carga remota opcional para graficos
-
-`tools/seed_shard_demo_data.py` e uma ferramenta administrativa executada no
-seu computador, nao uma rota da API. Ela se conecta ao PostgreSQL informado e
-adiciona somente usuarios comuns, chamados, eventos e comentarios; nao cria
-admins/tecnicos, nao envia emails e nao apaga nem atualiza dados. O padrao e
-simulacao. Para gravar, exige `--apply` e uma confirmacao digitada com o host.
-Faca backup antes: a carga e permanente e nao tem limpeza automatica. A URL do
-banco deve ser fornecida interativamente pelo PowerShell, nunca colocada neste
-README, no `.env` versionado ou na linha de comando.
-
 ## Diagnostico de IP real na hospedagem
 
 A rota abaixo existe para confirmar como a hospedagem encaminha o IP real do visitante para a API, mas fica desligada por padrao:
@@ -459,13 +591,11 @@ Mesmo habilitada, ela exige login como administrador e retorna apenas:
 
 A rota nao retorna `Cookie`, `Authorization` nem outros headers sensiveis. Use essa informacao para decidir se `TRUSTED_PROXY_HOPS=1` e seguro. Nao habilite `TRUSTED_PROXY_HOPS=1` no chute: se a hospedagem nao sobrescrever os headers de proxy corretamente, um cliente poderia falsificar o IP e enfraquecer o rate limit.
 
-Na Shard testada em 22/07/2026, `CF-Connecting-IP` apresentou o IP publico do visitante e `X-Forwarded-For` apresentou a lista `visitante, proxy`. Por isso, apos subir esta versao, a configuracao recomendada para a Shard e:
-
-```env
-TRUSTED_PROXY_HOPS=1
-```
-
-Em uma VPS ou outra plataforma, mantenha `TRUSTED_PROXY_HOPS=0` se a API receber conexao direta. Se usar Nginx, Cloudflare, proxy reverso ou balanceador, habilite apenas depois de confirmar que o proxy remove ou sobrescreve headers enviados pelo cliente.
+Mantenha `TRUSTED_PROXY_HOPS=0` no desenvolvimento local e se a API receber
+conexao direta. Em qualquer provedor, ajuste esse valor apenas depois de
+confirmar quantos proxies confiaveis existem e que eles removem ou sobrescrevem
+headers enviados pelo cliente. Nao reutilize a configuracao de outro ambiente
+sem essa verificacao.
 
 ## Logs e privacidade
 
@@ -481,7 +611,7 @@ A API segue o padrao REST principal:
 
 - `200 OK`: consultas, login, logout, atualizacoes e acoes que retornam corpo de resposta.
 - `201 Created`: criacao de usuario, chamado e comentario.
-- `204 No Content`: exclusoes feitas por administrador, sem corpo de resposta.
+- `204 No Content`: exclusoes feitas por administrador ou cancelamentos pelo autor antes do atendimento, sem corpo de resposta.
 - `400 Bad Request`: regra de negocio invalida, como codigo incorreto ou status incompatível.
 - `401 Unauthorized`: usuario nao autenticado ou credenciais invalidas.
 - `403 Forbidden`: usuario autenticado sem permissao para a acao.
@@ -494,26 +624,30 @@ A API segue o padrao REST principal:
 
 O administrador inicial e criado automaticamente na primeira execucao usando `ADMIN_EMAIL` e `ADMIN_PASSWORD`. Nao existe seed de dados ficticios no boot de producao; a carga opcional para testes locais fica isolada em `tools/generate_demo_data.py`, aceita somente SQLite e usa contas marcadas como demonstracao.
 
-## Deploy na Shard
+## Hospedagem opcional
 
-Configure as variaveis de ambiente pelo painel da Shard:
+O mesmo codigo pode ser hospedado na Shard, em uma VPS ou outro provedor com
+Python e PostgreSQL. Configure segredos no ambiente, nunca no repositorio:
 
 ```env
 DATABASE_URL=postgresql://usuario:senha@host:5432/nome_do_banco?sslmode=require
 SECRET_KEY=gere_uma_chave_aleatoria_com_32_caracteres_ou_mais
 AUTH_COOKIE_SECURE=true
-AUTH_COOKIE_SAMESITE=none
+AUTH_COOKIE_SAMESITE=lax
 AUTH_COOKIE_DOMAIN=
 ADMIN_EMAIL=email_do_administrador
-ADMIN_PASSWORD=senha_inicial_forte_com_12_ou_mais_caracteres
-ALLOWED_ORIGINS=https://url-do-seu-frontend.shardweb.app
-SMTP_USERNAME=SEU_EMAIL@gmail.com
-SMTP_PASSWORD=COLOQUE_A_SENHA_DE_APP_NO_PAINEL
+ADMIN_PASSWORD=troque_esta_senha_antes_de_publicar
+ALLOWED_ORIGINS=https://app.example.com
+SMTP_USERNAME=sua-conta@gmail.com
+SMTP_PASSWORD=senha_de_app_do_gmail_sem_espacos
 REDIS_URL=
-TRUSTED_PROXY_HOPS=1
+TRUSTED_PROXY_HOPS=0
 ```
 
-No Gmail, `SMTP_USERNAME` deve usar o email completo da conta. A senha deve ser uma senha de app criada na conta Google, nunca a senha normal de login.
+Substitua todos os exemplos. Ajuste `AUTH_COOKIE_SAMESITE` e
+`TRUSTED_PROXY_HOPS` conforme os cuidados descritos acima. Instale apenas
+`requirements.txt` em producao; `requirements-dev.txt` e destinado a testes.
+No Gmail, a senha SMTP deve ser uma senha de app, nunca a senha normal da conta.
 
 Comando de inicializacao:
 
@@ -568,7 +702,7 @@ EVOLUTION_API_URL=https://...
 EVOLUTION_API_KEY=...
 EVOLUTION_INSTANCE=helpwebhealth
 EVOLUTION_WEBHOOK_SECRET=...
-WHATSAPP_FRONTEND_BASE_URL=https://frontendhelpwebhealth.shardweb.app
+WHATSAPP_FRONTEND_BASE_URL=https://app.example.com
 ```
 
 Quando `WHATSAPP_ENABLED=true`, as cinco variaveis da Evolution acima e o

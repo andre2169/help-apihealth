@@ -33,7 +33,7 @@ class Ticket(Base):
         index=True,
     )
 
-    # open | in_progress | resolved | closed | reopened
+    # open | in_progress | resolved | closed | reopened | cancelled (archived)
     status = Column(String(20), nullable=False, default="open", index=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)

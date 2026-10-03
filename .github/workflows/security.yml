@@ -32,3 +32,5 @@ jobs:
 
       - name: Audit Python dependencies
         run: pip-audit -r requirements-dev.txt
+      - name: Check security-sensitive Python patterns
+        run: bandit -r app main.py -ll -iii

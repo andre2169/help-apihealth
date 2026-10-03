@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from app.db.models.ticket import Ticket
 from app.db.models.ticket_event import TicketEvent
 from app.db.models.user import User
+from app.db.models.catalog_option import CatalogOption
+from app.core.classification import classification_key
+from app.services.reports.aggregation import activity_series, normalize_counts
 from app.services.tickets.access import apply_ticket_personal_scope
 
 
@@ -33,6 +36,7 @@ def _ticket_summary_rows(query):
         Ticket.technician_id,
         Ticket.created_at,
         Ticket.due_at,
+        Ticket.sla_hours,
     ).all()
 
     return [
@@ -48,6 +52,7 @@ def _ticket_summary_rows(query):
             "technician_id": row.technician_id,
             "created_at": row.created_at,
             "due_at": row.due_at,
+            "sla_hours": row.sla_hours,
         }
         for row in rows
     ]
@@ -59,6 +64,15 @@ def _start_of_day(value: date):
 
 def _end_of_day(value: date):
     return datetime.combine(value, time.max)
+
+
+def _classification_filter(query, column, value):
+    key = classification_key(value)
+    matches = [
+        name for (name,) in query.with_entities(column).distinct().all()
+        if classification_key(name) == key
+    ]
+    return query.filter(column.in_(matches))
 
 
 def _apply_report_filters(
@@ -85,10 +99,10 @@ def _apply_report_filters(
         query = query.filter(Ticket.priority == priority)
 
     if category:
-        query = query.filter(Ticket.category == category)
+        query = _classification_filter(query, Ticket.category, category)
 
     if sector:
-        query = query.filter(Ticket.sector == sector)
+        query = _classification_filter(query, Ticket.sector, sector)
 
     if operational_impact:
         query = query.filter(Ticket.operational_impact == operational_impact)
@@ -294,24 +308,30 @@ def dashboard_summary_service(*, db: Session, current_user: User):
 
     technician_queue = []
     my_active_tickets = []
+    technician_queue_total = 0
+    my_active_total = 0
 
     if current_user.role in ["technician", "admin"]:
+        queue_query = db.query(Ticket).filter(
+            Ticket.deleted_at.is_(None),
+            Ticket.status.in_(["open", "reopened"]),
+            Ticket.technician_id.is_(None),
+        )
+        my_query = db.query(Ticket).filter(
+            Ticket.deleted_at.is_(None),
+            Ticket.technician_id == current_user.id,
+            Ticket.status == "in_progress",
+        )
+        technician_queue_total = queue_query.count()
+        my_active_total = my_query.count()
         technician_queue = _ticket_summary_rows(
-            db.query(Ticket)
-            .filter(
-                Ticket.status.in_(["open", "reopened"]),
-                Ticket.technician_id.is_(None),
-            )
+            queue_query
             .order_by(Ticket.created_at.asc(), Ticket.id.asc())
             .limit(8)
         )
 
         my_active_tickets = _ticket_summary_rows(
-            db.query(Ticket)
-            .filter(
-                Ticket.technician_id == current_user.id,
-                Ticket.status == "in_progress",
-            )
+            my_query
             .order_by(Ticket.updated_at.desc(), Ticket.id.desc())
             .limit(8)
         )
@@ -327,6 +347,8 @@ def dashboard_summary_service(*, db: Session, current_user: User):
         "recent_tickets": recent_tickets,
         "technician_queue": technician_queue,
         "my_active_tickets": my_active_tickets,
+        "technician_queue_total": technician_queue_total,
+        "my_active_total": my_active_total,
     }
 
 
@@ -356,9 +378,14 @@ def reports_overview_service(
 
     status_counts = _counts_by(query, Ticket.status)
     priority_counts = _counts_by(query, Ticket.priority)
-    category_counts = _counts_by(query, Ticket.category)
-    sector_counts = _counts_by(query, Ticket.sector)
-    equipment_counts = _counts_by(query, Ticket.equipment)
+    catalog = db.query(CatalogOption).all()
+    category_counts = normalize_counts(
+        _counts_by(query, Ticket.category), [item.name for item in catalog if item.kind == "category"],
+    )
+    sector_counts = normalize_counts(
+        _counts_by(query, Ticket.sector), [item.name for item in catalog if item.kind == "sector"],
+    )
+    equipment_counts = normalize_counts(_counts_by(query, Ticket.equipment))
     impact_counts = _counts_by(query, Ticket.operational_impact)
     daily_counts = _daily_counts(query)
     requester_counts = _requester_counts(query)
@@ -393,14 +420,14 @@ def reports_overview_service(
         ).outerjoin(filtered_tickets, filtered_tickets.c.technician_id == User.id)
 
         if current_user.role == "admin":
-            technician_query = technician_query.filter(User.role.in_(["technician", "admin"]))
+            technician_query = technician_query.filter(User.role == "technician")
         else:
             technician_query = technician_query.filter(User.id == current_user.id)
 
         technician_rows = (
             technician_query
             .group_by(User.id, User.name)
-            .order_by(User.name.asc())
+            .order_by(func.count(filtered_tickets.c.ticket_id).desc(), User.name.asc(), User.id.asc())
             .all()
         )
 
@@ -412,6 +439,11 @@ def reports_overview_service(
         "equipment_counts": equipment_counts,
         "impact_counts": impact_counts,
         "daily_counts": daily_counts,
+        "activity_series": activity_series(daily_counts, start_date=start_date, end_date=end_date),
+        "non_technician_assigned_total": query.filter(
+            Ticket.technician_id.isnot(None),
+            ~Ticket.technician_id.in_(select(User.id).where(User.role == "technician")),
+        ).count() if current_user.role == "admin" else 0,
         "requester_counts": requester_counts,
         "active_age_counts": active_age_counts,
         "queue_snapshot": queue_snapshot,

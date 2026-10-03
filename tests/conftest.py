@@ -39,6 +39,8 @@ from app.middlewares.rate_limit import _rate_limit_buckets
 from app.services.auth import rate_limits as auth_rate_limits
 from app.services.auth import account_verification as account_verification_service
 from app.db.models.user import User
+from app.db.models.catalog_option import CatalogOption
+from app.core.classification import DEFAULT_CATEGORIES, DEFAULT_SECTORS, classification_key
 
 
 sent_verification_codes: list[tuple[str, str]] = []
@@ -59,6 +61,11 @@ def clean_database():
     try:
         for table in reversed(Base.metadata.sorted_tables):
             db.execute(table.delete())
+        db.add_all([
+            CatalogOption(kind=kind, name=name, normalized_name=classification_key(name))
+            for kind, names in (("sector", DEFAULT_SECTORS), ("category", DEFAULT_CATEGORIES))
+            for name in names
+        ])
         db.commit()
     finally:
         db.close()

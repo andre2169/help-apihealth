@@ -7,6 +7,7 @@ from app.db.models.ticket import Ticket
 from app.db.models.ticket_event import TicketEvent
 from app.db.models.token_blocklist import TokenBlocklist
 from app.db.models.user import User
+from app.db.models.maintenance_notice_read import MaintenanceNoticeRead
 from app.core.request_context import mask_email
 from app.core.exceptions import (
     UserNotFound,
@@ -295,6 +296,7 @@ def delete_user_service(
     )
 
     deleted_role = user.role
+    db.query(MaintenanceNoticeRead).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.delete(user)
     record_audit_event(
         db,

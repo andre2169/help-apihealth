@@ -216,6 +216,11 @@ def request_action(method: str, path: str) -> str:
             "me/password/confirm": "auth.password_change.confirm",
             "me/email/request": "auth.email_change.request",
             "me/email/confirm": "auth.email_change.confirm",
+            "mfa/recovery-codes": (
+                "auth.mfa_recovery_codes.create"
+                if method == "POST"
+                else "auth.mfa_recovery_codes.status"
+            ),
         }
         if method == "PATCH" and auth_path == "me":
             return "auth.profile.update"
@@ -236,12 +241,15 @@ def request_action(method: str, path: str) -> str:
             "resolve": "ticket.resolve",
             "close": "ticket.close",
             "reopen": "ticket.reopen",
+            "cancel": "ticket.cancel",
             "timeline": "ticket.timeline",
             "comments": "comment.create" if method == "POST" else "comment.request",
         }
         return ticket_actions.get(action, "ticket.request")
 
     if resource == "admin":
+        if remainder and remainder[0] == "maintenance-notices":
+            return "admin.maintenance_notice.update"
         if remainder == ["network-debug"]:
             return "admin.network_debug"
         if remainder == ["notification-events"]:
@@ -273,6 +281,11 @@ def request_action(method: str, path: str) -> str:
         if method == "PATCH":
             return "notification.read"
         return "notification.request"
+
+    if resource == "maintenance-notices":
+        if method == "POST" and len(remainder) == 2 and remainder[1] == "read":
+            return "maintenance_notice.read"
+        return "maintenance_notice.list"
 
     return f"{resource}.request"
 

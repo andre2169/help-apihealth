@@ -7,6 +7,7 @@ class TicketStatus(str, Enum):
     resolved = "resolved"
     closed = "closed"
     reopened = "reopened"
+    cancelled = "cancelled"
 
 
 class UserRole(str, Enum):

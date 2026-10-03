@@ -3,6 +3,7 @@ import re
 
 from sqlalchemy.orm import Session, aliased
 from app.db.models.ticket import Ticket
+from app.db.models.ticket_event import TicketEvent
 from app.core.events import create_ticket_event
 from app.db.models.user import User
 from sqlalchemy import case, or_
@@ -20,6 +21,7 @@ from app.services.notifications.service import (
 )
 from app.services.tickets.access import apply_ticket_visibility, can_view_ticket
 from app.core.search import LIKE_ESCAPE, contains_pattern, normalize_search, page_rows
+from app.services.ticket_catalog import require_catalog_name
 
 # loggs do sistema
 logger = logging.getLogger(__name__)
@@ -56,6 +58,15 @@ def get_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> Ti
     if not can_view_ticket(user=current_user, ticket=ticket):
         raise TicketPermissionDenied("Você não tem permissão para ver este ticket")
 
+    ticket.can_cancel = (
+        ticket.user_id == current_user.id
+        and ticket.status == "open"
+        and ticket.technician_id is None
+        and not db.query(TicketEvent.id).filter(
+            TicketEvent.ticket_id == ticket.id,
+            TicketEvent.event_type == "ASSIGNED",
+        ).first()
+    )
     return ticket
 
 
@@ -112,6 +123,8 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
     if not current_user.email_verified:
         raise TicketPermissionDenied("Confirme seu email antes de abrir chamados.")
 
+    category = require_catalog_name(db, kind="category", value=ticket_in.category)
+    sector = require_catalog_name(db, kind="sector", value=ticket_in.sector)
     impact = _value(ticket_in.operational_impact)
     priority = _value(ticket_in.priority)
     sla_hours = _sla_hours_for(impact, priority)
@@ -124,9 +137,9 @@ def create_ticket_service(*, db: Session, ticket_in, current_user: User) -> Tick
     ticket = Ticket(
         title=ticket_in.title,
         description=ticket_in.description,
-        category=ticket_in.category,
+        category=category,
         priority=priority,
-        sector=ticket_in.sector,
+        sector=sector,
         equipment=ticket_in.equipment,
         asset_tag=ticket_in.asset_tag,
         operational_impact=impact,
@@ -185,9 +198,18 @@ def assign_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     if ticket.technician_id is not None and ticket.technician_id != current_user.id:
         raise TicketPermissionDenied("Este ticket já está atribuído a outro técnico")
 
-    ticket.technician_id = current_user.id
     old_status = ticket.status
-    ticket.status = "in_progress"
+    # Conditional updates serialize assignment and cancellation, including stale reads.
+    changed = db.query(Ticket).filter(
+        Ticket.id == ticket.id,
+        Ticket.deleted_at.is_(None),
+        Ticket.status == old_status,
+        or_(Ticket.technician_id.is_(None), Ticket.technician_id == current_user.id),
+    ).update({Ticket.technician_id: current_user.id, Ticket.status: "in_progress"}, synchronize_session=False)
+    if changed != 1:
+        db.rollback()
+        raise TicketInvalidStatus("O chamado foi alterado. Atualize a página antes de assumir.")
+    db.refresh(ticket)
 
     event = create_ticket_event(
         db=db,
@@ -334,6 +356,8 @@ def close_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> 
 
 def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> None:
     """Marca um chamado como excluído sem remover seus dados do banco."""
+    if current_user.role != "admin":
+        raise TicketPermissionDenied("Apenas administradores podem excluir chamados")
     ticket = _get_ticket_or_fail(db, ticket_id)
 
     logger.warning(
@@ -356,30 +380,50 @@ def delete_ticket_service(*, db: Session, ticket_id: int, current_user: User) ->
     db.commit()
 
 
-def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> Ticket:
-    """
-    Reabre um ticket que estava resolvido ou fechado.
+def cancel_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> None:
+    """Cancela o próprio chamado somente antes do primeiro atendimento."""
+    ticket = _get_ticket_or_fail(db, ticket_id)
+    if ticket.user_id != current_user.id:
+        raise TicketPermissionDenied("Você só pode cancelar seus próprios chamados")
 
-    Regra:
-    - Usuário comum só pode reabrir os próprios tickets.
-    - Admin pode reabrir qualquer ticket.
-    - Técnico não reabre por enquanto; ele resolve/atua, mas a reabertura representa contestação do usuário.
-    """
+    was_assigned = db.query(TicketEvent.id).filter(
+        TicketEvent.ticket_id == Ticket.id,
+        TicketEvent.event_type == "ASSIGNED",
+    ).exists()
+    changed = db.query(Ticket).filter(
+        Ticket.id == ticket_id,
+        Ticket.user_id == current_user.id,
+        Ticket.deleted_at.is_(None),
+        Ticket.status == "open",
+        Ticket.technician_id.is_(None),
+        ~was_assigned,
+    ).update({
+        Ticket.status: "cancelled",
+        Ticket.deleted_at: datetime.now(timezone.utc),
+        Ticket.deleted_by_id: current_user.id,
+    }, synchronize_session=False)
+    if changed != 1:
+        db.rollback()
+        raise TicketInvalidStatus("Só é possível cancelar antes de um técnico assumir o chamado.")
+    delete_notifications_for_ticket(db=db, ticket_id=ticket_id)
+    create_ticket_event(
+        db=db, ticket_id=ticket_id, user_id=current_user.id,
+        event_type="CANCELLED", from_status="open", to_status="cancelled",
+    )
+    record_audit_event(
+        db, actor_id=current_user.id, action="ticket.cancelled",
+        target_type="ticket", target_id=ticket_id,
+        details={"deletion_mode": "soft", "reason": "owner_before_assignment"},
+    )
+    db.commit()
+
+
+def reopen_ticket_service(*, db: Session, ticket_id: int, current_user: User) -> Ticket:
+    """Somente o administrador pode reabrir um chamado resolvido ou fechado."""
+    if current_user.role != "admin":
+        raise TicketPermissionDenied("Apenas administradores podem reabrir chamados")
 
     ticket = _get_ticket_or_fail(db, ticket_id)
-
-    # Admin pode reabrir qualquer ticket.
-    # Usuário comum só pode reabrir ticket dele.
-    if current_user.role != "admin" and ticket.user_id != current_user.id:
-        logger.warning(
-            "Tentativa de reabrir ticket sem permissão | ticket_id=%s | current_user_id=%s | ticket_owner_id=%s | role=%s",
-            ticket.id,
-            current_user.id,
-            ticket.user_id,
-            current_user.role,
-        )
-
-        raise TicketPermissionDenied("Você não tem permissão para reabrir este ticket")
 
     # Só faz sentido reabrir ticket que foi resolvido ou fechado.
     if ticket.status not in ["resolved", "closed"]:
@@ -551,7 +595,20 @@ def list_tickets_service(
     else:
         order_column = allowed_order_fields.get(order_by, Ticket.created_at)
 
-    if direction == "asc":
+    if order_by == "due_at":
+        if direction == "asc":
+            query = query.order_by(
+                Ticket.due_at.is_(None).asc(),
+                Ticket.due_at.asc(),
+                Ticket.id.asc(),
+            )
+        else:
+            query = query.order_by(
+                Ticket.due_at.is_(None).asc(),
+                Ticket.due_at.desc(),
+                Ticket.id.desc(),
+            )
+    elif direction == "asc":
         query = query.order_by(order_column.asc(), Ticket.id.asc())
     else:
         query = query.order_by(order_column.desc(), Ticket.id.desc())
@@ -569,6 +626,7 @@ def list_tickets_service(
             Ticket.equipment,
             Ticket.operational_impact,
             Ticket.status,
+            Ticket.sla_hours,
             Ticket.technician_id,
             owner_alias.name.label("owner_name"),
             technician_alias.name.label("technician_name"),
@@ -591,6 +649,7 @@ def list_tickets_service(
             "equipment": row.equipment,
             "operational_impact": row.operational_impact,
             "status": row.status,
+            "sla_hours": row.sla_hours,
             "technician_id": row.technician_id,
             "owner_name": row.owner_name,
             "technician_name": row.technician_name,

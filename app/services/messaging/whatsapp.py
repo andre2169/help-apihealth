@@ -38,7 +38,7 @@ def build_ticket_message(notification: Notification) -> str:
     ticket_url = f"{settings.WHATSAPP_FRONTEND_BASE_URL}/tickets/{ticket.id}"
     return "\n".join(
         (
-            "HelpWeb Health",
+            "HELP WEB HEALTH",
             "",
             notification.title,
             f"Chamado: CH-{ticket.id:06d}",

@@ -1,7 +1,7 @@
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.core import security_policy as policy
 from app.core.config import settings
@@ -9,6 +9,12 @@ from app.core.config import settings
 
 class EvolutionDeliveryError(RuntimeError):
     """Falha sanitizada de comunicação com a Evolution API."""
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Provider credentials and recipient data must stay on the configured URL.
+        return None
 
 
 def _provider_message_id(payload: object) -> str | None:
@@ -59,7 +65,7 @@ def send_text_message(*, number: str, text: str) -> str | None:
     )
 
     try:
-        with urlopen(request, timeout=policy.EVOLUTION_TIMEOUT_SECONDS) as response:
+        with build_opener(_NoRedirect()).open(request, timeout=policy.EVOLUTION_TIMEOUT_SECONDS) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         # O corpo da resposta pode conter dados do destinatário ou da sessão.

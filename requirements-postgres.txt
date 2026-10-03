@@ -1,1 +1,2 @@
+# Compatibilidade com comandos antigos: PostgreSQL ja esta no arquivo principal.
 -r requirements.txt

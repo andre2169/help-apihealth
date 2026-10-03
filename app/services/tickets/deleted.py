@@ -10,6 +10,7 @@ from app.db.models.ticket import Ticket
 from app.db.models.user import User
 from app.services.audit.events import record_audit_event
 from app.services.tickets.timeline import get_ticket_timeline
+from app.services.tickets.service import _due_at, _sla_hours_for
 from app.core.search import LIKE_ESCAPE, contains_pattern, normalize_search, page_rows
 
 
@@ -156,15 +157,34 @@ def restore_deleted_ticket_service(
 
     ticket = _get_deleted_ticket_or_fail(db, ticket_id, current_user)
     previous_status = ticket.status
+    restored_values = {"deleted_at": None, "deleted_by_id": None}
+    if previous_status == "cancelled":
+        sla_hours = _sla_hours_for(ticket.operational_impact, ticket.priority)
+        restored_values.update(
+            status="open", resolved_at=None, sla_hours=sla_hours, due_at=_due_at(sla_hours)
+        )
 
-    ticket.deleted_at = None
-    ticket.deleted_by_id = None
+    # Only the request that restores the archived row may record recovery events.
+    updated = (
+        db.query(Ticket)
+        .filter(
+            Ticket.id == ticket_id,
+            Ticket.deleted_at.is_not(None),
+            Ticket.status == previous_status,
+        )
+        .update(restored_values, synchronize_session=False)
+    )
+    if updated != 1:
+        db.rollback()
+        raise TicketNotFound("Chamado excluído não encontrado")
+    db.refresh(ticket)
     event = create_ticket_event(
         db=db,
         ticket_id=ticket.id,
         user_id=current_user.id,
         event_type="RECOVERED",
-        to_status=previous_status,
+        from_status=previous_status,
+        to_status=ticket.status,
     )
     db.flush()
     record_audit_event(
